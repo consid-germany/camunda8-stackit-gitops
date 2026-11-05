@@ -1,0 +1,19 @@
+# The camunda namespace has default-deny-egress; allow the backup pod to reach the
+# orchestration management API (port 9600) intra-namespace. DNS egress is already granted to
+# all pods by the base allow-egress-dns policy, so only 9600 needs adding here.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: camunda-backup-egress
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: camunda-backup
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - podSelector: {}
+      ports:
+        - protocol: TCP
+          port: 9600

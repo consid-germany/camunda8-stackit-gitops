@@ -1,0 +1,15 @@
+# Dedicated StorageClass for Zeebe broker PVCs:
+#   * Retain   - keep the volume if the StatefulSet/PVC is deleted (broker data).
+#   * WaitForFirstConsumer - bind in the same AZ the broker pod is scheduled to.
+# cinder (OpenStack) CSI driver, premium-perf volume type.
+# Referenced by the Camunda values as orchestration.pvcStorageClassName.
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: zeebe-retain
+provisioner: cinder.csi.openstack.org
+parameters:
+  type: storage_premium_perf4
+reclaimPolicy: Retain
+volumeBindingMode: WaitForFirstConsumer
+allowVolumeExpansion: true

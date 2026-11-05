@@ -1,0 +1,98 @@
+# Alertmanager's top-level configuration, referenced by
+# alertmanagerSpec.alertmanagerConfiguration in platform/kube-prometheus-stack/prod-values.yaml.
+# It lives here rather than in those values because the chart renders its config as a
+# Secret, and ArgoCD manages no Secrets -- the operator renders the
+# generated one instead. PROD only (monitoring is not deployed in dev).
+apiVersion: monitoring.coreos.com/v1alpha1
+kind: AlertmanagerConfig
+metadata:
+  name: teams-routing
+  namespace: monitoring
+spec:
+  route:
+    groupBy:
+      - alertname
+      - namespace
+    groupWait: 30s
+    groupInterval: 5m
+    repeatInterval: 4h
+    receiver: teams-notifications
+    routes:
+      # Dead-man heartbeat: if these stop arriving, the alerting path itself is down.
+      - receiver: watchdog-heartbeat
+        matchers:
+          - name: alertname
+            value: Watchdog
+        groupWait: 0s
+        groupInterval: 12h
+        repeatInterval: 12h
+      # Permanently true on 3 nodes (requests > capacity minus largest node); accepted.
+      - receiver: "null"
+        matchers:
+          - name: alertname
+            value: KubeCPUOvercommit|KubeMemoryOvercommit
+            matchType: "=~"
+      # Open warnings re-notify every 12h (upstream default); criticals keep the 4h cadence.
+      - receiver: teams-notifications
+        matchers:
+          - name: severity
+            value: warning
+        repeatInterval: 12h
+  # Carried over from the chart defaults, which used to reach the config by map merge.
+  inhibitRules:
+    - equal:
+        - namespace
+        - alertname
+      sourceMatch:
+        - name: severity
+          value: critical
+      targetMatch:
+        - name: severity
+          value: warning|info
+          matchType: "=~"
+    - equal:
+        - namespace
+        - alertname
+      sourceMatch:
+        - name: severity
+          value: warning
+      targetMatch:
+        - name: severity
+          value: info
+    - equal:
+        - namespace
+      sourceMatch:
+        - name: alertname
+          value: InfoInhibitor
+      targetMatch:
+        - name: severity
+          value: info
+    - targetMatch:
+        - name: alertname
+          value: InfoInhibitor
+  receivers:
+    - name: "null"
+    - name: teams-notifications
+      msteamsv2Configs:
+        # The URL's sig= parameter is a bearer credential; it comes from SM via ESO
+        # (cluster-config/external-secrets/monitoring/alertmanager-teams-webhook.yaml).
+        - webhookURL:
+            name: teams-webhook-url
+            key: url
+          sendResolved: true
+          title: "[{{ .Status | toUpper }}] {{ .CommonLabels.alertname }}"
+          text: |-
+            {{ range .Alerts }}**{{ .Labels.severity }}** {{ .Annotations.summary }}
+
+            {{ .Annotations.description }}
+
+            {{ end }}
+    # Same webhook secret as above -- reused so this adds no second credential.
+    - name: watchdog-heartbeat
+      msteamsv2Configs:
+        - webhookURL:
+            name: teams-webhook-url
+            key: url
+          sendResolved: false
+          title: "[HEARTBEAT] prod monitoring alive"
+          text: "Prometheus and Alertmanager are up. If this stops arriving, alerting is down."

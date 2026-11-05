@@ -1,0 +1,23 @@
+# Wave 3: nightly Camunda backup CronJob (after Camunda is deployed in wave 2).
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: dev-camunda-backup
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "3"
+spec:
+  project: camunda-dev
+  source:
+    repoURL: https://github.com/REPLACE_ME-github-org/camunda8-stackit-gitops.git
+    targetRevision: {{ .Values.targetRevision | quote }}
+    path: cluster-config/camunda-backup/dev
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: camunda
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - ServerSideApply=true

@@ -1,0 +1,343 @@
+# kube-prometheus-stack Helm values -- PROD (monitoring is not deployed in dev).
+# dns_name is my-camunda-prod.stackit.gg -> grafana.my-camunda-prod.stackit.gg.
+#
+# Grafana SSO: Viewer is the floor; admin-group members are elevated via
+# role_attribute_path. The Grafana client secret is provided as
+# GF_AUTH_AZUREAD_CLIENT_SECRET via the grafana-entra-secret ESO secret
+# (cluster-config/external-secrets/monitoring/grafana.yaml).
+
+additionalPrometheusRulesMap:
+  security:
+    groups:
+      - name: platform-security
+        rules:
+          - alert: ExternalSecretSyncError
+            expr: externalsecrets_sync_calls_error > 0
+            for: 5m
+            labels:
+              severity: critical
+            annotations:
+              summary: "ESO sync failing for {{ $labels.name }}"
+              description: "ExternalSecret {{ $labels.namespace }}/{{ $labels.name }} cannot sync from secret store."
+          - alert: CertificateExpiringSoon
+            expr: certmanager_certificate_expiration_timestamp_seconds - time() < 21 * 24 * 3600
+            for: 1h
+            labels:
+              severity: warning
+            annotations:
+              summary: "Certificate {{ $labels.namespace }}/{{ $labels.name }} expires in under 21 days"
+              description: "cert-manager has not renewed it; renewal failure is otherwise silent until expiry."
+          - alert: LogIngestionStalled
+            expr: sum(rate(loki_distributor_lines_received_total[15m])) == 0
+            for: 30m
+            labels:
+              severity: warning
+            annotations:
+              summary: "Loki is receiving no log lines"
+              description: "Alloy is not delivering to Loki; logs are being lost silently."
+          - alert: IngressHighErrorRate
+            expr: sum(rate(nginx_ingress_controller_requests{status=~"5.."}[5m])) by (ingress, namespace) > 1
+            for: 5m
+            labels:
+              severity: warning
+            annotations:
+              summary: "High 5xx rate on {{ $labels.namespace }}/{{ $labels.ingress }}"
+              description: "More than 1 req/s with 5xx status on ingress {{ $labels.ingress }}."
+  # Minimal Camunda-specific set. Metric names verified against a live 8.9 broker
+  # (zeebe_health, zeebe_exporter_state, zeebe_backpressure_*) — 2026-07-02;
+  # zeebe_stream_processor_last_processed_position, zeebe_exporter_last_exported_position
+  # (label: exporter), kubelet_volume_stats_available_bytes — 2026-08-04.
+  camunda:
+    groups:
+      - name: camunda-platform
+        rules:
+          - alert: ZeebeBrokerReplicasMissing
+            expr: kube_statefulset_status_replicas_ready{namespace="camunda", statefulset="prod-camunda-zeebe"} < 3
+            for: 5m
+            labels:
+              severity: critical
+            annotations:
+              summary: "Zeebe broker quorum at risk: {{ $value }}/3 brokers ready"
+              description: "Fewer than 3 Zeebe brokers ready for 5 minutes. At 1 ready broker, Raft quorum is lost and process execution stops."
+          - alert: ZeebePartitionUnhealthy
+            expr: min by (partition) (zeebe_health{namespace="camunda"}) < 1
+            for: 5m
+            labels:
+              severity: critical
+            annotations:
+              summary: "Zeebe partition {{ $labels.partition }} unhealthy"
+              description: "zeebe_health reports partition {{ $labels.partition }} unhealthy for 5 minutes — the partition is not processing."
+          - alert: ZeebeExportingPaused
+            # 0 = exporting. The nightly backup soft-pauses exporting for the duration of
+            # the snapshot (activeDeadlineSeconds 1800), so alert only after 30m: at that
+            # point a backup has hung or the resume failed — Operate/Tasklist stop
+            # updating and the event log grows unbounded until exporting resumes.
+            expr: max(zeebe_exporter_state{namespace="camunda"}) > 0
+            for: 30m
+            labels:
+              severity: critical
+            annotations:
+              summary: "Zeebe exporting paused for over 30 minutes"
+              description: "zeebe_exporter_state != EXPORTING for 30+ min. Likely a hung backup job that never resumed exporting. Resume via the management API and investigate the last camunda-backup job."
+          - alert: CamundaBackupStale
+            expr: time() - max(kube_cronjob_status_last_successful_time{namespace="camunda", cronjob="camunda-backup"}) > 93600
+            for: 30m
+            labels:
+              severity: warning
+            annotations:
+              summary: "No successful Camunda backup in 26h"
+              description: "The camunda-backup CronJob has not completed successfully in over 26 hours. Check the last Job's logs; exporting state is covered by ZeebeExportingPaused."
+          - alert: ZeebeBackpressureHigh
+            expr: avg(zeebe_backpressure_inflight_requests_count{namespace="camunda"} / zeebe_backpressure_requests_limit{namespace="camunda"}) > 0.9
+            for: 10m
+            labels:
+              severity: warning
+            annotations:
+              summary: "Zeebe request backpressure above 90% of limit"
+              description: "Inflight requests have been at >90% of the backpressure limit for 10 minutes — clients will start seeing RESOURCE_EXHAUSTED. Check broker CPU/disk and partition load."
+          - alert: ZeebeExportBacklogHigh
+            # ZeebeExportingPaused only catches state != EXPORTING; the exporter can be
+            # healthy and still fall behind. min() over the exporter label: the log is
+            # pinned by the slowest of camundaexporter/opensearch. 200k sits well above
+            # idle (<2500 records) and, since #82, above anything load produces.
+            expr: max by (partition) (zeebe_stream_processor_last_processed_position{namespace="camunda"}) - min by (partition) (zeebe_exporter_last_exported_position{namespace="camunda"}) > 200000
+            for: 15m
+            labels:
+              severity: warning
+            annotations:
+              summary: "Zeebe partition {{ $labels.partition }} export backlog above 200k records"
+              description: "Processed-minus-exported position on partition {{ $labels.partition }} has exceeded 200k records for 15 minutes — roughly 40s of drain at the post-#82 rate of ~4700 records/s per partition, and not clearing. Since #82 export absorbs everything the engine accepts, so this firing under load is a regression signal, not expected behaviour: check that optimize mode is still on before shedding load. Operate and the v2 search APIs read the exported view, so they are stale by at least this much; the event log cannot compact past it either. Note prod stops at 20:00 and is woken by hand — a large backlog at that point freezes a stale view until someone wakes it."
+          - alert: ZeebeVolumeFillingFast
+            # The chart default KubePersistentVolumeFillingUp predicts over 4 days, far too
+            # slow for the Zeebe log: at the measured ~700 MiB/min per broker under load a
+            # 64Gi PVC reaches the 2GB freeSpace.processing watermark in ~90 min, at which
+            # point the broker rejects ALL writes. Rate-aware, so it is quiet at idle.
+            expr: predict_linear(kubelet_volume_stats_available_bytes{namespace="camunda", persistentvolumeclaim=~"data-prod-camunda-zeebe-.*"}[30m], 7200) < 0
+            for: 10m
+            labels:
+              severity: critical
+            annotations:
+              summary: "Zeebe volume {{ $labels.persistentvolumeclaim }} on track to fill within 2h"
+              description: "At the growth rate of the last 30 minutes this volume fills within 2 hours. Zeebe stops accepting writes once free space drops below 2GB — this is a hard stop, not backpressure. The usual cause is export falling behind, because the log only compacts after export (see ZeebeExportBacklogHigh)."
+
+# Resource limits on every monitoring workload: an unbounded
+# Prometheus/Loki on a 3-node cluster can evict Zeebe.
+prometheus:
+  # Chart-native PDB. maxUnavailable, never minAvailable: minAvailable deadlocks a drain.
+  podDisruptionBudget:
+    enabled: true
+    minAvailable: ""
+    maxUnavailable: 1
+  prometheusSpec:
+    # Both replicas scrape everything independently. The operator adds the
+    # prometheus_replica external label and a matching alert_relabel_configs labeldrop,
+    # so Alertmanager still sees one alert, not two. Queries are not deduplicated:
+    # Grafana round-robins the Service, so graph edges differ slightly between replicas.
+    replicas: 2
+    # "hard" renders required hostname anti-affinity; preferred lost the cold-start
+    # tie-break and left the PDB decorative.
+    podAntiAffinity: "hard"
+    resources:
+      requests: {cpu: 250m, memory: 1Gi}
+      limits: {cpu: "1", memory: 2Gi}
+    retention: 15d
+    # Discover ServiceMonitors/PodMonitors/Rules cluster-wide (required for the
+    # Camunda ServiceMonitor, which lives in the camunda namespace).
+    serviceMonitorSelectorNilUsesHelmValues: false
+    podMonitorSelectorNilUsesHelmValues: false
+    ruleSelectorNilUsesHelmValues: false
+    storageSpec:
+      volumeClaimTemplate:
+        spec:
+          accessModes:
+            - ReadWriteOnce
+          resources:
+            requests:
+              storage: 10Gi
+
+# Operator watches only the namespaces that carry its CRs. The chart
+# keeps its ClusterRole either way; this narrows what the operator touches.
+# Gardener runs these in the seed cluster; unscrapeable from the shoot.
+kubeControllerManager:
+  enabled: false
+kubeScheduler:
+  enabled: false
+kubeEtcd:
+  enabled: false
+
+# Runs here, but the chart's default k8s-app selector matches no Gardener label.
+kubeProxy:
+  enabled: true
+  service:
+    selector:
+      app: kubernetes
+      role: proxy
+
+defaultRules:
+  rules:
+    etcd: false
+    kubeControllerManager: false
+    kubeSchedulerAlerting: false
+    kubeSchedulerRecording: false
+
+prometheusOperator:
+  namespaces:
+    releaseNamespace: true
+    additional:
+      - camunda
+  resources:
+    requests: {cpu: 50m, memory: 128Mi}
+    limits: {cpu: 200m, memory: 256Mi}
+
+grafana:
+  assertNoLeakedSecrets: true
+  replicas: 2
+  # No hard/soft helper on this subchart -- the rule is written out.
+  affinity:
+    podAntiAffinity:
+      requiredDuringSchedulingIgnoredDuringExecution:
+        - topologyKey: kubernetes.io/hostname
+          labelSelector:
+            matchLabels:
+              app.kubernetes.io/name: grafana
+              app.kubernetes.io/instance: prod-kube-prometheus-stack
+  podDisruptionBudget:
+    enabled: true
+    minAvailable: ""
+    maxUnavailable: 1
+  resources:
+    requests: {cpu: 100m, memory: 192Mi}
+    limits: {cpu: 500m, memory: 512Mi}
+  # Namespaced Role instead of cluster-wide secrets/configmaps read.
+  # All grafana_dashboard ConfigMaps live in this namespace.
+  rbac:
+    namespaced: true
+  sidecar:
+    # Reload work is bursty; 100m throttled it ~50% of periods. Request unchanged.
+    resources:
+      requests: {cpu: 25m, memory: 64Mi}
+      limits: {cpu: 200m, memory: 128Mi}
+    dashboards:
+      searchNamespace: null
+      # Sort dashboards into folders: the chart's own go to "Kubernetes"; any other
+      # dashboard ConfigMap picks its folder with a grafana_folder annotation.
+      folderAnnotation: grafana_folder
+      annotations:
+        grafana_folder: Kubernetes
+      provider:
+        foldersFromFilesStructure: true
+  # Stateless. Dashboards come from ConfigMaps, datasources from values, identity from
+  # Entra; the PV held only SQLite prefs, annotations and starred dashboards.
+  persistence:
+    enabled: false
+  ingress:
+    enabled: true
+    ingressClassName: nginx
+    annotations:
+      cert-manager.io/cluster-issuer: letsencrypt-production
+      nginx.ingress.kubernetes.io/ssl-redirect: "true"
+      # Each replica keeps its own SQLite, so a session is valid only on the pod that
+      # issued it. Pin a browser to one replica; losing that pod costs one Entra redirect.
+      nginx.ingress.kubernetes.io/affinity: cookie
+      nginx.ingress.kubernetes.io/affinity-mode: persistent
+      nginx.ingress.kubernetes.io/session-cookie-name: grafana-replica
+    hosts:
+      - grafana.my-camunda-prod.stackit.gg
+    tls:
+      - hosts:
+          - grafana.my-camunda-prod.stackit.gg
+        secretName: grafana-tls
+  # The chart gates its static admin Secret and the GF_SECURITY_ADMIN_* env on this key,
+  # not on the grafana.ini equivalent: without it the chart ships admin/prom-operator.
+  env:
+    GF_SECURITY_DISABLE_INITIAL_ADMIN_CREATION: "true"
+  envFromSecret: grafana-entra-secret
+  grafana.ini:
+    server:
+      root_url: https://grafana.my-camunda-prod.stackit.gg
+    auth:
+      disable_login_form: true
+    # Entra-only, no local break-glass — same posture as the rest of the platform
+    #.
+    auth.basic:
+      enabled: false
+    users:
+      auto_assign_org_role: Viewer
+    auth.azuread:
+      enabled: true
+      allow_sign_up: true
+      client_id: REPLACE_ME-prod-grafana-client-id
+      client_secret: "$__env{GF_AUTH_AZUREAD_CLIENT_SECRET}"
+      scopes: openid email profile
+      auth_url: https://login.microsoftonline.com/REPLACE_ME-entra-tenant-id/oauth2/v2.0/authorize
+      token_url: https://login.microsoftonline.com/REPLACE_ME-entra-tenant-id/oauth2/v2.0/token
+      # Comma-separated Entra group object IDs allowed to sign in.
+      allowed_groups: REPLACE_ME-prod-admins-group-id
+      # admin-group members -> Admin, everyone else -> Viewer (the floor).
+      role_attribute_path: "contains(groups[*], 'REPLACE_ME-prod-admins-group-id') && 'Admin' || 'Viewer'"
+      role_attribute_strict: false
+  additionalDataSources:
+    # Release-prefixed Service name; a bare `loki` does not exist.
+    - name: Loki
+      type: loki
+      url: http://prod-loki.monitoring.svc.cluster.local:3100
+      access: proxy
+      isDefault: false
+
+alertmanager:
+  enabled: true
+  # Chart-native PDB. maxUnavailable, never minAvailable: minAvailable deadlocks a drain.
+  podDisruptionBudget:
+    enabled: true
+    minAvailable: ""
+    maxUnavailable: 1
+  alertmanagerSpec:
+    # 3 replicas gossip silences and the notification log, so losing a node loses no
+    # alerting. Alertmanager needs no quorum -- a lone survivor still notifies.
+    replicas: 3
+    # "hard" renders required hostname anti-affinity; preferred lost the cold-start
+    # tie-break and left the PDB decorative.
+    podAntiAffinity: "hard"
+    # Routing is the teams-routing AlertmanagerConfig (cluster-config/alertmanager/prod).
+    # The chart renders its config as a Secret; ArgoCD manages none, so
+    # the operator generates it instead. Removing alertmanagerConfiguration silently falls
+    # back to the chart's default routing.
+    useExistingSecret: true
+    alertmanagerConfiguration:
+      name: teams-routing
+    # teams-routing is the top-level config, not an add-on. The chart's default empty
+    # selector would also append it as a namespaced sub-route; no object carries this label.
+    alertmanagerConfigSelector:
+      matchLabels:
+        alertmanager-subroute: "true"
+    resources:
+      requests: {cpu: 25m, memory: 64Mi}
+      limits: {cpu: 100m, memory: 128Mi}
+    storage:
+      volumeClaimTemplate:
+        spec:
+          accessModes:
+            - ReadWriteOnce
+          resources:
+            requests:
+              storage: 2Gi
+
+kube-state-metrics:
+  resources:
+    requests: {cpu: 25m, memory: 64Mi}
+    limits: {cpu: 100m, memory: 192Mi}
+
+prometheus-node-exporter:
+  # Scrape cost scales with cgroups on the node; 100m throttled it ~45% of periods.
+  resources:
+    requests: {cpu: 25m, memory: 32Mi}
+    limits: {cpu: 200m, memory: 64Mi}
+
+# Drops the nodes-aix and nodes-darwin dashboards. Workers are Linux only, so
+# both render empty. Dashboards only -- the DaemonSet is unaffected.
+nodeExporter:
+  operatingSystems:
+    aix:
+      enabled: false
+    darwin:
+      enabled: false

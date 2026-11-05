@@ -1,0 +1,22 @@
+# Wave 1: OpenSearch egress NetworkPolicy (OpenSearch secondary-storage profile, prod only).
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: prod-network-policies-opensearch
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "1"
+spec:
+  project: camunda-prod
+  source:
+    repoURL: https://github.com/REPLACE_ME-github-org/camunda8-stackit-gitops.git
+    targetRevision: {{ .Values.targetRevision | quote }}
+    path: cluster-config/network-policies/opensearch
+  destination:
+    server: https://kubernetes.default.svc
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - ServerSideApply=true

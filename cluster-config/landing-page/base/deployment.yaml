@@ -1,0 +1,64 @@
+# Static landing page served at /home (Camunda owns the host root '/'). Reuses the host
+# TLS secret camunda-tls (no second certificate for the same host).
+# nginx-unprivileged, automountServiceAccountToken=false, drop ALL caps.
+# The `landing-page` ConfigMap is generated per env from index.html (configMapGenerator);
+# kustomize hash-suffixes it and rewrites the volume reference below, so an HTML change
+# rolls the pod automatically.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: landing-page
+  labels:
+    app.kubernetes.io/name: landing-page
+    app.kubernetes.io/component: landing-page
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: landing-page
+      app.kubernetes.io/component: landing-page
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: landing-page
+        app.kubernetes.io/component: landing-page
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 101
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: nginx
+          # Digest of 1.27-alpine (multi-arch index), resolved 2026-07-29; bump deliberately.
+          image: nginxinc/nginx-unprivileged:1.27-alpine@sha256:65e3e85dbaed8ba248841d9d58a899b6197106c23cb0ff1a132b7bfe0547e4c0
+          ports:
+            - containerPort: 8080
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: false  # nginx-unprivileged writes tmp files
+            runAsNonRoot: true
+            runAsUser: 101
+            capabilities:
+              drop:
+                - ALL
+          volumeMounts:
+            - name: html
+              mountPath: /usr/share/nginx/html
+              readOnly: true
+          resources:
+            requests:
+              cpu: 10m
+              memory: 16Mi
+            limits:
+              cpu: 50m
+              memory: 64Mi
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 8080
+      volumes:
+        - name: html
+          configMap:
+            name: landing-page

@@ -1,0 +1,22 @@
+# Camunda egress to managed OpenSearch. STACKIT serves OpenSearch on ports 53091-53098
+# (coordinator 53091 + per-node 53092/53095/53098) — NOT the OpenSearch default 9200.
+# The old port:9200 rule silently dropped all traffic (default-deny egress), so Zeebe's
+# exporter and Optimize could never reach OpenSearch (prod 502, 2026-07-03). Host is
+# dynamic (ESO-injected), so allow by port range to 0.0.0.0/0.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-egress-opensearch
+  namespace: camunda
+spec:
+  podSelector: {}
+  policyTypes:
+    - Egress
+  egress:
+    - ports:
+        - port: 53091
+          endPort: 53098
+          protocol: TCP
+      to:
+        - ipBlock:
+            cidr: 0.0.0.0/0

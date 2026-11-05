@@ -1,0 +1,32 @@
+# App-of-apps ROOT for the DEV cluster.
+# The foundation's bootstrapped ArgoCD applies THIS Application (with the same
+# helm parameter); it renders the bootstrap/dev chart, which fans out to every
+# child Application + AppProject. Break-glass apply:
+#   kubectl apply -f bootstrap/root-app-dev.yaml
+# Sync waves on the children order the rollout.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: root-dev
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/REPLACE_ME-github-org/camunda8-stackit-gitops.git
+    targetRevision: main
+    path: bootstrap/dev
+    helm:
+      parameters:
+        - name: targetRevision
+          value: main
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: argocd
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=false

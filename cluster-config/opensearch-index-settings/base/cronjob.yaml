@@ -1,0 +1,101 @@
+# The legacy opensearch exporter has no refresh_interval setting (8.9.6), so its
+# zeebe-record_* indices take OpenSearch's 1s default -- gitops#72 left this uncovered.
+# Applies the interval to indices that lack it; a no-op once every index has it.
+# zeebe-record_* only: identity/session indices (camunda-user, camunda-web-session)
+# are on the auth read path and Camunda's own templates deliberately leave them at 1s.
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: opensearch-index-settings
+  labels:
+    app.kubernetes.io/name: opensearch-index-settings
+    app.kubernetes.io/component: index-settings
+spec:
+  # Dated indices are created on the day's first export, so catch them within the hour.
+  schedule: "*/30 * * * *"
+  timeZone: "Etc/UTC"
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 300
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      activeDeadlineSeconds: 300
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/name: opensearch-index-settings
+            app.kubernetes.io/component: index-settings
+        spec:
+          restartPolicy: Never
+          automountServiceAccountToken: false
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 100
+            seccompProfile:
+              type: RuntimeDefault
+          containers:
+            - name: index-settings
+              image: curlimages/curl:8.11.1@sha256:c1fe1679c34d9784c1b0d1e5f62ac0a79fca01fb6377cdd33e90473c6f9f9a69
+              imagePullPolicy: IfNotPresent
+              envFrom:
+                - configMapRef:
+                    name: opensearch-index-settings-config
+                - secretRef:
+                    name: platform-connection-config # OPENSEARCH_URL, OPENSEARCH_USERNAME
+              env:
+                - name: OPENSEARCH_PASSWORD
+                  valueFrom:
+                    secretKeyRef:
+                      name: opensearch-credentials
+                      key: password
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                runAsNonRoot: true
+                capabilities:
+                  drop:
+                    - ALL
+              resources:
+                requests:
+                  cpu: 25m
+                  memory: 32Mi
+                limits:
+                  cpu: 100m
+                  memory: 64Mi
+              command: ["/bin/sh", "-c"]
+              args:
+                - |
+                  set -eu
+                  AUTH="${OPENSEARCH_USERNAME}:${OPENSEARCH_PASSWORD}"
+                  INTERVAL="${REFRESH_INTERVAL:-5s}"
+
+                  # Every zeebe-record_* index, and the subset that already carries the setting.
+                  curl -fsS -u "$AUTH" "${OPENSEARCH_URL}/_cat/indices?h=index" \
+                    | grep -E '^zeebe-record_' > /tmp/all.txt
+                  # filter_path omits indices that lack the field, so this lists only those that have it
+                  curl -fsS -u "$AUTH" \
+                    "${OPENSEARCH_URL}/zeebe-record_*/_settings?filter_path=*.settings.index.refresh_interval" \
+                    | grep -o '"[a-zA-Z0-9_.:-]*":{"settings"' \
+                    | sed 's/":{"settings"//; s/^"//' > /tmp/has.txt
+
+                  # Per-index test, not "grep -vf": busybox grep -f with an empty pattern file
+                  # matches every line, so -v would yield nothing on the first run.
+                  UPDATED=0
+                  while read -r index; do
+                    [ -n "$index" ] || continue
+                    if grep -qxF "$index" /tmp/has.txt 2>/dev/null; then continue; fi
+                    curl -fsS -u "$AUTH" -X PUT "${OPENSEARCH_URL}/${index}/_settings" \
+                      -H 'Content-Type: application/json' \
+                      -d "{\"index\":{\"refresh_interval\":\"${INTERVAL}\"}}" > /dev/null
+                    echo "set refresh_interval=${INTERVAL} on ${index}"
+                    UPDATED=$((UPDATED + 1))
+                  done < /tmp/all.txt
+                  echo "index-settings complete: ${UPDATED} of $(wc -l < /tmp/all.txt) zeebe-record_* index(es) updated"
+              volumeMounts:
+                - name: tmp
+                  mountPath: /tmp
+          volumes:
+            - name: tmp
+              emptyDir: {}

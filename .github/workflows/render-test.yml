@@ -1,0 +1,41 @@
+# Render dev + prod across all layers and assert with conftest. Static checks only
+# (no cluster access), mirroring the infra repo's lint.yml philosophy.
+name: render-test
+
+on:
+  pull_request:
+    paths:
+      - camunda/**
+      - envs/**
+      - cluster-config/**
+      - platform/**
+      - bootstrap/**
+      - tests/**
+      # Edits to this file must run it, or action bumps ship untested.
+      - .github/workflows/render-test.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  render-test:
+    runs-on: ubuntu-latest
+    env:
+      CONFTEST_VERSION: "0.56.0"
+    steps:
+      - uses: actions/checkout@v7
+
+      # Helm 4: chart 15 (8.10) requires it and ArgoCD >= 3.5 renders with it.
+      - uses: azure/setup-helm@v5
+        with:
+          version: v4.2.4
+
+      # kubectl (for `kubectl kustomize`) is preinstalled on ubuntu-latest.
+      - name: Install conftest
+        run: |
+          curl -fsSL --retry 3 --retry-all-errors "https://github.com/open-policy-agent/conftest/releases/download/v${CONFTEST_VERSION}/conftest_${CONFTEST_VERSION}_Linux_x86_64.tar.gz" \
+            | sudo tar -xz -C /usr/local/bin conftest
+
+      - name: Render and assert
+        run: tests/run.sh

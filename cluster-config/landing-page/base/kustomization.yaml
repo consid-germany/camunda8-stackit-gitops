@@ -1,0 +1,7 @@
+# Shared landing-page workload (Deployment + Service). The per-env overlays add the
+# namespace, the host Ingress, and the ConfigMap (generated from that env's index.html).
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - deployment.yaml
+  - service.yaml

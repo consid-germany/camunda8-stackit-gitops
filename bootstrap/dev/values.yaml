@@ -1,0 +1,2 @@
+# Revision every child Application tracks on this repo. Dev deploys on merge.
+targetRevision: main

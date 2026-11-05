@@ -1,0 +1,90 @@
+# Loki Helm values (SingleBinary, S3 chunk storage). Trimmed scale/HA extras
+# (caches, canary, gateway). 30-day retention.
+
+deploymentMode: SingleBinary
+loki:
+  commonConfig:
+    # Stays 1 deliberately. Loki needs floor(RF/2)+1 ingester acks, so RF 2 over 2
+    # replicas would demand both and make a single loss stop ingestion outright.
+    replication_factor: 1
+  storage:
+    type: s3
+    # One bucket; ruler objects sit under their own prefix. admin is GEL-only.
+    bucketNames:
+      chunks: "${LOKI_S3_BUCKET}"
+      ruler: "${LOKI_S3_BUCKET}"
+      admin: "${LOKI_S3_BUCKET}"
+    s3:
+      endpoint: "${LOKI_S3_ENDPOINT}"
+      region: "${LOKI_S3_REGION}"
+      accessKeyId: "${LOKI_S3_ACCESSKEY}"
+      secretAccessKey: "${LOKI_S3_SECRETKEY}"
+      s3ForcePathStyle: true
+      insecure: false
+  auth_enabled: false
+  schemaConfig:
+    configs:
+      - from: "2024-01-01"
+        store: tsdb
+        object_store: s3
+        schema: v13
+        index:
+          prefix: index_
+          period: 24h
+  limits_config:
+    retention_period: 720h   # 30 days
+  compactor:
+    retention_enabled: true
+    delete_request_store: s3
+singleBinary:
+  # Credentials come from the loki-storage-credentials Secret (ESO) and are expanded at
+  # startup, so the rendered config object holds placeholders rather than a credential.
+  # These must sit here, not under global: the chart's global.extraArgs/extraEnvFrom scope
+  # list does not include singleBinary, so they are silently dropped there.
+  extraArgs:
+    - "-config.expand-env=true"
+  extraEnvFrom:
+    - secretRef:
+        name: loki-storage-credentials
+  resources:
+    requests: {cpu: 250m, memory: 512Mi}
+    limits: {cpu: "1", memory: 1Gi}
+  # Two ingesters behind the memberlist ring. The chart's default affinity is already
+  # required hostname anti-affinity, so they cannot share a node.
+  replicas: 2
+  persistence:
+    enabled: true
+    size: 10Gi
+read:
+  replicas: 0
+write:
+  replicas: 0
+backend:
+  replicas: 0
+chunksCache:
+  enabled: false
+resultsCache:
+  enabled: false
+gateway:
+  enabled: false
+lokiCanary:
+  enabled: false
+monitoring:
+  # selfMonitoring stays off (it deploys its own Grafana Agent stack); the chart's
+  # ServiceMonitor is enough to scrape loki_distributor_* for the ingestion alert.
+  selfMonitoring:
+    enabled: false
+  lokiCanary:
+    enabled: false
+  serviceMonitor:
+    enabled: true
+test:
+  enabled: false
+# Namespaced Role instead of cluster-wide secrets read.
+rbac:
+  namespaced: true
+sidecar:
+  # Rule reload is bursty; 100m throttled it ~45% of periods. Request unchanged.
+  resources:
+    requests: {cpu: 25m, memory: 64Mi}
+    limits: {cpu: 200m, memory: 128Mi}

@@ -1,0 +1,33 @@
+# App-of-apps ROOT for the PROD cluster -- break-glass copy.
+# The authoritative root-prod is created by the foundation (modules/argocd-bootstrap),
+# which sets targetRevision AND the helm parameter to the pinned commit SHA from
+# camunda8-stackit-terraform stacks/prod/foundation/prod.tfvars. For a manual bootstrap,
+# replace BOTH sentinels below with that SHA, then:
+#   kubectl apply -f bootstrap/root-app-prod.yaml
+# Sync waves on the children order the rollout.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: root-prod
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/REPLACE_ME-github-org/camunda8-stackit-gitops.git
+    targetRevision: REPLACE_ME_PROD_SHA
+    path: bootstrap/prod
+    helm:
+      parameters:
+        - name: targetRevision
+          value: REPLACE_ME_PROD_SHA
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: argocd
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=false

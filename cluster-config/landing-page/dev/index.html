@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Camunda 8 · my-camunda-dev.stackit.gg</title>
+  <style>
+    :root { color-scheme: light dark; }
+    body { margin: 0; font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+           background: #0d1117; color: #e6edf3; display: flex; min-height: 100vh;
+           align-items: center; justify-content: center; }
+    .wrap { width: 100%; max-width: 880px; padding: 2rem; }
+    h1 { font-weight: 650; margin: 0 0 .25rem; }
+    .host { color: #8b949e; margin: 0 0 2rem; font-size: .95rem; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 1rem; }
+    a.card { display: block; padding: 1.1rem 1.25rem; border: 1px solid #30363d; border-radius: 12px;
+             text-decoration: none; color: inherit; background: #161b22; transition: border-color .15s, transform .15s; }
+    a.card:hover { border-color: #fc5d0d; transform: translateY(-2px); }
+    .card .t { font-weight: 600; font-size: 1.05rem; }
+    .card .d { color: #8b949e; font-size: .85rem; margin-top: .25rem; }
+    footer { margin-top: 2rem; color: #8b949e; font-size: .8rem; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>Camunda 8 Platform</h1>
+    <p class="host">my-camunda-dev.stackit.gg</p>
+    <div class="grid">
+      <a class="card" target="_blank" rel="noopener" href="https://my-camunda-dev.stackit.gg/operate"><div class="t">Operate</div><div class="d">Monitor running and completed process instances</div></a>
+      <a class="card" target="_blank" rel="noopener" href="https://my-camunda-dev.stackit.gg/tasklist"><div class="t">Tasklist</div><div class="d">Claim and complete human tasks</div></a>
+      <a class="card" target="_blank" rel="noopener" href="https://my-camunda-dev.stackit.gg/modeler"><div class="t">Web Modeler</div><div class="d">Design and deploy BPMN, DMN and forms</div></a>
+      <a class="card" target="_blank" rel="noopener" href="https://my-camunda-dev.stackit.gg/console"><div class="t">Console</div><div class="d">Launchpad and cluster overview</div></a>
+      <a class="card" target="_blank" rel="noopener" href="https://my-camunda-dev.stackit.gg/admin"><div class="t">Admin</div><div class="d">Roles, tenants, authorizations, task listeners, cluster variables and the operation log</div></a>
+      <a class="card" target="_blank" rel="noopener" href="https://my-camunda-dev.stackit.gg/managementidentity"><div class="t">Management Identity</div><div class="d">App access: roles and mappings for Web Modeler, Console and Optimize</div></a>
+      <a class="card" target="_blank" rel="noopener" href="https://argocd.my-camunda-dev.stackit.gg"><div class="t">ArgoCD</div><div class="d">GitOps delivery: platform sync status and history</div></a>
+    </div>
+    <footer>Zeebe gRPC: <code>grpcs://zeebe.my-camunda-dev.stackit.gg:443</code> &nbsp;·&nbsp; Connectors API: <code>https://my-camunda-dev.stackit.gg/connectors</code></footer>
+  </div>
+</body>
+</html>

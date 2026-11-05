@@ -1,0 +1,30 @@
+# Wave 0: cert-manager (Helm). CRDs enabled, webhook timeout 15s.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: prod-cert-manager
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "0"
+spec:
+  project: platform-prod
+  sources:
+    - repoURL: https://charts.jetstack.io
+      chart: cert-manager
+      targetRevision: v1.20.0
+      helm:
+        valueFiles:
+          - $values/platform/cert-manager/values.yaml
+          - $values/platform/cert-manager/prod-values.yaml
+    - repoURL: https://github.com/REPLACE_ME-github-org/camunda8-stackit-gitops.git
+      targetRevision: {{ .Values.targetRevision | quote }}
+      ref: values
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: cert-manager
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - ServerSideApply=true

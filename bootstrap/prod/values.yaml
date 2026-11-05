@@ -1,0 +1,3 @@
+# Revision every child Application tracks on this repo. No default on purpose:
+# the foundation root Application must pass a full commit SHA (the prod deploy pin).
+targetRevision: ""

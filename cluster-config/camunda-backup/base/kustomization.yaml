@@ -1,0 +1,7 @@
+# Shared nightly Camunda backup CronJob + its egress NetworkPolicy. The per-env overlay sets
+# the namespace and the MGMT_BASE_URL (the env's orchestration management service).
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - cronjob.yaml
+  - networkpolicy.yaml

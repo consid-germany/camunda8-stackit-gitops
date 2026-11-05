@@ -1,0 +1,10 @@
+# PROD only -- dev has no OpenSearch (rdbms secondary storage), so no exporter indices.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: camunda
+resources:
+  - ../base
+configMapGenerator:
+  - name: opensearch-index-settings-config
+    literals:
+      - REFRESH_INTERVAL=5s

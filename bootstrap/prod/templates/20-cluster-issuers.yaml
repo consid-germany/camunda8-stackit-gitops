@@ -1,0 +1,22 @@
+# Wave 1: cert-manager ClusterIssuers (depend on cert-manager + webhook from wave 0).
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: prod-cluster-issuers
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "1"
+spec:
+  project: platform-prod
+  source:
+    repoURL: https://github.com/REPLACE_ME-github-org/camunda8-stackit-gitops.git
+    targetRevision: {{ .Values.targetRevision | quote }}
+    path: cluster-config/issuers/prod
+  destination:
+    server: https://kubernetes.default.svc
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - ServerSideApply=true

@@ -1,0 +1,118 @@
+# --- ingress-nginx namespace NetworkPolicies ---
+# The controller keeps the chart-default cluster-wide secrets list/watch (it serves
+# TLS secrets in camunda, argocd and monitoring — a single-namespace watch is not
+# possible). These policies are the compensating control: a compromised controller
+# can still read secrets via the apiserver, but cannot roam the pod network.
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-ingress
+  namespace: ingress-nginx
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+---
+# LB traffic arrives with the yawol LB source IP; only the HTTP/HTTPS ports are open.
+# Kubelet probes (10254) come from the local host, which Calico always allows.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-http-https
+  namespace: ingress-nginx
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+      ports:
+        - port: 80
+          protocol: TCP
+        - port: 443
+          protocol: TCP
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-egress
+  namespace: ingress-nginx
+spec:
+  podSelector: {}
+  policyTypes:
+    - Egress
+---
+# DNS egress is destination-only (no ports clause) on purpose.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-egress-dns
+  namespace: ingress-nginx
+spec:
+  podSelector: {}
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+---
+# kube-apiserver (Ingress/Secret watch; external endpoint on SKE/Gardener).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-egress-https
+  namespace: ingress-nginx
+spec:
+  podSelector: {}
+  policyTypes:
+    - Egress
+  egress:
+    - ports:
+        - port: 443
+          protocol: TCP
+      to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+---
+# nginx proxies to backend POD IPs directly: Camunda apps + landing page (camunda),
+# argocd-server (argocd), Grafana (monitoring, prod only - matches nothing in dev).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-egress-backends
+  namespace: ingress-nginx
+spec:
+  podSelector: {}
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - namespaceSelector:
+            matchExpressions:
+              - key: kubernetes.io/metadata.name
+                operator: In
+                values:
+                  - camunda
+                  - argocd
+                  - monitoring
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-egress-intra-namespace
+  namespace: ingress-nginx
+spec:
+  podSelector: {}
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - podSelector: {}

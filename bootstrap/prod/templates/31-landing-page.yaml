@@ -1,0 +1,23 @@
+# Wave 2: landing page (raw manifests, dev variant: no Optimize/Grafana cards).
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: prod-landing-page
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "2"
+spec:
+  project: camunda-prod
+  source:
+    repoURL: https://github.com/REPLACE_ME-github-org/camunda8-stackit-gitops.git
+    targetRevision: {{ .Values.targetRevision | quote }}
+    path: cluster-config/landing-page/prod
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: camunda
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - ServerSideApply=true

@@ -1,0 +1,165 @@
+# Daily Camunda backup. Schedule is per-env (kustomization overlay) at noon UTC: clusters
+# stop at 20:00 and are woken by hand, so a slot passed while stopped is skipped, not caught up.
+# One ${ID} reused for every component call -- never generate a second one.
+# OpenSearch steps (prod only) gated on OPENSEARCH_SNAPSHOT_REPOSITORY being set.
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: camunda-backup
+  labels:
+    app.kubernetes.io/name: camunda-backup
+    app.kubernetes.io/component: backup
+spec:
+  schedule: "0 2 * * *"
+  timeZone: "Etc/UTC"
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 600
+  successfulJobsHistoryLimit: 7
+  failedJobsHistoryLimit: 7
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      activeDeadlineSeconds: 1800
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/name: camunda-backup
+            app.kubernetes.io/component: backup
+        spec:
+          restartPolicy: Never
+          automountServiceAccountToken: false
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 100
+            seccompProfile:
+              type: RuntimeDefault
+          containers:
+            - name: backup
+              image: curlimages/curl:8.11.1@sha256:c1fe1679c34d9784c1b0d1e5f62ac0a79fca01fb6377cdd33e90473c6f9f9a69
+              imagePullPolicy: IfNotPresent
+              envFrom:
+                - configMapRef:
+                    name: camunda-backup-config
+                - secretRef:
+                    name: opensearch-backup-credentials
+                    optional: true # absent in dev
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                runAsNonRoot: true
+                capabilities:
+                  drop:
+                    - ALL
+              resources:
+                requests:
+                  cpu: 25m
+                  memory: 32Mi
+                limits:
+                  cpu: 100m
+                  memory: 64Mi
+              command: ["/bin/sh", "-c"]
+              args:
+                - |
+                  set -eu
+                  ID="$(date +%s)" # must be > any previous backupId; day-granularity collides on a same-day re-run
+                  echo "Camunda backup ${ID} -> ${MGMT_BASE_URL}"
+                  trap 'curl -fsS -X POST "${MGMT_BASE_URL}/actuator/exporting/resume" >/dev/null 2>&1 || true' EXIT
+
+                  # Shared by every family's cleanup below; computed once so today's survives.
+                  CUTOFF=$(( $(date +%s) - ${BACKUP_RETENTION_DAYS:-7} * 86400 ))
+
+                  # No jq in this image; grep the status text instead.
+                  poll_backup() {
+                    label="$1"; url="$2"
+                    for _ in $(seq 1 90); do
+                      body="$(curl -fsS "${url}" || echo '')"
+                      case "${body}" in
+                        *FAILED*|*INCOMPLETE*) echo "${body}"; echo "${label} ${ID} not healthy"; exit 1 ;;
+                      esac
+                      if printf '%s' "${body}" | grep -q COMPLETED && ! printf '%s' "${body}" | grep -q IN_PROGRESS; then
+                        echo "${label} ${ID} COMPLETED"; return 0
+                      fi
+                      sleep 10
+                    done
+                    echo "${label} ${ID} timed out"; exit 1
+                  }
+
+                  # OpenSearch rejects a snapshot delete while another snapshot op is in
+                  # flight on the same repo (concurrent_snapshot_execution_exception) --
+                  # retry instead of treating it as a hard failure.
+                  delete_snapshot() {
+                    snap="$1"
+                    for _ in $(seq 1 6); do
+                      if curl -fsS -u "${OPENSEARCH_USERNAME}:${OPENSEARCH_PASSWORD}" \
+                          -X DELETE "${OPENSEARCH_URL}/_snapshot/${OPENSEARCH_SNAPSHOT_REPOSITORY}/${snap}"; then
+                        echo "deleted zeebe-record snapshot ${snap}"
+                        return 0
+                      fi
+                      sleep 5
+                    done
+                    echo "warning: could not delete snapshot ${snap}, will retry next run"
+                  }
+
+                  curl -fsS -X POST "${MGMT_BASE_URL}/actuator/exporting/pause?soft=true"
+
+                  if [ -n "${OPENSEARCH_SNAPSHOT_REPOSITORY:-}" ]; then
+                    # Idempotent -- self-heals if OpenSearch is recreated.
+                    curl -fsS -u "${OPENSEARCH_USERNAME}:${OPENSEARCH_PASSWORD}" -X PUT "${OPENSEARCH_URL}/_snapshot/${OPENSEARCH_SNAPSHOT_REPOSITORY}" \
+                      -H 'Content-Type: application/json' -d "{
+                        \"type\": \"s3\",
+                        \"settings\": {
+                          \"bucket\": \"${OPENSEARCH_SNAPSHOT_S3_BUCKET}\",
+                          \"base_path\": \"${OPENSEARCH_SNAPSHOT_S3_BASEPATH}\",
+                          \"endpoint\": \"${OPENSEARCH_SNAPSHOT_S3_ENDPOINT}\",
+                          \"region\": \"${OPENSEARCH_SNAPSHOT_S3_REGION}\",
+                          \"access_key\": \"${OPENSEARCH_SNAPSHOT_S3_ACCESSKEY}\",
+                          \"secret_key\": \"${OPENSEARCH_SNAPSHOT_S3_SECRETKEY}\"
+                        }
+                      }"
+
+                    curl -fsS -X POST "${MGMT_BASE_URL}/actuator/backupHistory" \
+                      -H 'Content-Type: application/json' -d "{\"backupId\": ${ID}}"
+                    curl -fsS -X POST "${OPTIMIZE_MANAGEMENT_API}/actuator/backups" \
+                      -H 'Content-Type: application/json' -d "{\"backupId\": ${ID}}"
+                    poll_backup "web apps" "${MGMT_BASE_URL}/actuator/backupHistory/${ID}"
+                    poll_backup "optimize" "${OPTIMIZE_MANAGEMENT_API}/actuator/backups/${ID}"
+
+                    # Optimize still reads these directly.
+                    curl -fsS -u "${OPENSEARCH_USERNAME}:${OPENSEARCH_PASSWORD}" -X PUT "${OPENSEARCH_URL}/_snapshot/${OPENSEARCH_SNAPSHOT_REPOSITORY}/camunda_zeebe_records_backup_${ID}?wait_for_completion=true" \
+                      -H 'Content-Type: application/json' -d '{"indices": "zeebe-record*"}'
+
+                    # Cleanup: delete backups older than BACKUP_RETENTION_DAYS. Runs after
+                    # today's backup so a delete never removes the only copy in a range.
+                    for old in $(curl -fsS "${MGMT_BASE_URL}/actuator/backupHistory" | grep -o '"backupId":[0-9]*' | cut -d: -f2); do
+                      if [ "$old" -lt "$CUTOFF" ]; then
+                        curl -fsS -X DELETE "${MGMT_BASE_URL}/actuator/backupHistory/${old}"
+                        echo "deleted web apps backup ${old}"
+                      fi
+                    done
+                    for old in $(curl -fsS "${OPTIMIZE_MANAGEMENT_API}/actuator/backups" | grep -o '"backupId":[0-9]*' | cut -d: -f2); do
+                      if [ "$old" -lt "$CUTOFF" ]; then
+                        curl -fsS -X DELETE "${OPTIMIZE_MANAGEMENT_API}/actuator/backups/${old}"
+                        echo "deleted optimize backup ${old}"
+                      fi
+                    done
+                    for old in $(curl -fsS -u "${OPENSEARCH_USERNAME}:${OPENSEARCH_PASSWORD}" \
+                        "${OPENSEARCH_URL}/_snapshot/${OPENSEARCH_SNAPSHOT_REPOSITORY}/camunda_zeebe_records_backup_*" \
+                        | grep -o '"snapshot":"camunda_zeebe_records_backup_[0-9]*"' | grep -o '[0-9]*$'); do
+                      if [ "$old" -lt "$CUTOFF" ]; then
+                        delete_snapshot "camunda_zeebe_records_backup_${old}"
+                      fi
+                    done
+                  fi
+
+                  curl -fsS -X POST "${MGMT_BASE_URL}/actuator/backupRuntime" \
+                    -H 'Content-Type: application/json' -d "{\"backupId\": ${ID}}"
+                  poll_backup "zeebe" "${MGMT_BASE_URL}/actuator/backupRuntime/${ID}"
+
+                  # Zeebe runtime backups: prune the live view here. The bucket's lifecycle
+                  # rule only expires noncurrent (lock-protected) versions, never current ones.
+                  for old in $(curl -fsS "${MGMT_BASE_URL}/actuator/backupRuntime" | grep -o '"backupId":[0-9]*' | cut -d: -f2); do
+                    if [ "$old" -lt "$CUTOFF" ]; then
+                      curl -fsS -X DELETE "${MGMT_BASE_URL}/actuator/backupRuntime/${old}"
+                      echo "deleted zeebe runtime backup ${old}"
+                    fi
+                  done

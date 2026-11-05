@@ -1,0 +1,12 @@
+{
+  "$schema": "https://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "required": ["targetRevision"],
+  "properties": {
+    "targetRevision": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$",
+      "description": "Full commit SHA of this repo that prod deploys. Set by the foundation root Application (stacks/prod/foundation/prod.tfvars); a branch or tag is refused."
+    }
+  }
+}

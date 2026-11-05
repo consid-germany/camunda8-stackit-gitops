@@ -1,0 +1,42 @@
+# PROD-only overlay, merged on top of values.yaml. Monitoring is off in dev, so the
+# ServiceMonitor must not render there.
+# ServiceMonitor lives in monitoring: the operator's watch scope excludes cert-manager.
+prometheus:
+  enabled: true
+  servicemonitor:
+    enabled: true
+    namespace: monitoring
+
+# Scatter the three single-replica workloads off each other -- all four cert-manager pods
+# shared one node on every wake-up. Preferred, not required: at 1 replica a hard rule
+# would only strand one Pending. Selector carries the release prefix (prod-cert-manager);
+# a bare cert-manager instance label matches nothing.
+affinity:
+  podAntiAffinity:
+    preferredDuringSchedulingIgnoredDuringExecution:
+      - weight: 100
+        podAffinityTerm:
+          labelSelector:
+            matchLabels:
+              app.kubernetes.io/instance: prod-cert-manager
+          topologyKey: kubernetes.io/hostname
+webhook:
+  affinity:
+    podAntiAffinity:
+      preferredDuringSchedulingIgnoredDuringExecution:
+        - weight: 100
+          podAffinityTerm:
+            labelSelector:
+              matchLabels:
+                app.kubernetes.io/instance: prod-cert-manager
+            topologyKey: kubernetes.io/hostname
+cainjector:
+  affinity:
+    podAntiAffinity:
+      preferredDuringSchedulingIgnoredDuringExecution:
+        - weight: 100
+          podAffinityTerm:
+            labelSelector:
+              matchLabels:
+                app.kubernetes.io/instance: prod-cert-manager
+            topologyKey: kubernetes.io/hostname

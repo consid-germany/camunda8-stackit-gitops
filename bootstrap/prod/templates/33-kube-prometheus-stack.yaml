@@ -1,0 +1,31 @@
+# Wave 2: kube-prometheus-stack (Helm). Prometheus + Grafana (Entra SSO) +
+# Alertmanager (Teams). See platform/kube-prometheus-stack/prod-values.yaml.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: prod-kube-prometheus-stack
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "2"
+spec:
+  project: platform-prod
+  sources:
+    - repoURL: https://prometheus-community.github.io/helm-charts
+      chart: kube-prometheus-stack
+      targetRevision: 72.3.0
+      helm:
+        valueFiles:
+          - $values/platform/kube-prometheus-stack/prod-values.yaml
+    - repoURL: https://github.com/REPLACE_ME-github-org/camunda8-stackit-gitops.git
+      targetRevision: {{ .Values.targetRevision | quote }}
+      ref: values
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: monitoring
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      # CRD-heavy chart; SSA avoids last-applied annotation size limits.
+      - ServerSideApply=true

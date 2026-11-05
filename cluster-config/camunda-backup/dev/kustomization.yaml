@@ -1,0 +1,25 @@
+# DEV Camunda backup. MGMT_BASE_URL points at the dev orchestration management
+# service. Verify the name/port with: kubectl -n camunda get svc | grep 9600
+#
+# Schedule override: noon UTC, the hour most likely to fall inside a working session.
+# The cluster stops at 20:00 and is woken by hand, and startingDeadlineSeconds=600 means
+# a slot passed while stopped is skipped rather than caught up. dev's PostgresFlex managed
+# backup is on the same hour (dev.tfvars postgres.backup_schedule) to keep the engine
+# snapshot and RDBMS secondary store at aligned checkpoints.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: camunda
+resources:
+  - ../base
+patches:
+  - target:
+      kind: CronJob
+      name: camunda-backup
+    patch: |-
+      - op: replace
+        path: /spec/schedule
+        value: "0 12 * * *"
+configMapGenerator:
+  - name: camunda-backup-config
+    literals:
+      - MGMT_BASE_URL=http://dev-camunda-zeebe-gateway:9600

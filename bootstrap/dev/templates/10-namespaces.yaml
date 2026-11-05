@@ -1,0 +1,23 @@
+# Wave 0: namespaces with PSS labels.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: dev-namespaces
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "0"
+spec:
+  project: platform-dev
+  source:
+    repoURL: https://github.com/REPLACE_ME-github-org/camunda8-stackit-gitops.git
+    targetRevision: {{ .Values.targetRevision | quote }}
+    path: cluster-config/namespaces
+  destination:
+    server: https://kubernetes.default.svc
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    # Namespaces must exist before everything else.
+    syncOptions:
+      - ServerSideApply=true

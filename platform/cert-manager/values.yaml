@@ -1,0 +1,23 @@
+# cert-manager Helm values (chart https://charts.jetstack.io, see bootstrap App).
+# Pin resource names to the conventional "cert-manager". The ArgoCD release is
+# "<env>-cert-manager", which would otherwise name the controller SA "<env>-cert-manager".
+# The STACKIT DNS-01 webhook's RBAC binds the SA named "cert-manager", so the names must match
+# or the controller is forbidden from creating the dns01 solver resource (acme.stackit.de).
+fullnameOverride: cert-manager
+crds:
+  enabled: true
+# Gardener blocks SKE hibernation on webhooks with timeoutSeconds > 15;
+# cert-manager defaults to 30. Lower it so the cluster can hibernate.
+webhook:
+  timeoutSeconds: 15
+  resources:
+    requests: {cpu: 25m, memory: 64Mi}
+    limits: {cpu: 100m, memory: 128Mi}
+# Resource limits.
+resources:
+  requests: {cpu: 25m, memory: 64Mi}
+  limits: {cpu: 200m, memory: 256Mi}
+cainjector:
+  resources:
+    requests: {cpu: 25m, memory: 128Mi}
+    limits: {cpu: 200m, memory: 256Mi}

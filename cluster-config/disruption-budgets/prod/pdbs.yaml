@@ -1,0 +1,56 @@
+# PDBs for the multi-replica Camunda components. Prod only.
+# Never add a minAvailable PDB to a 1-replica workload: it deadlocks node drains.
+# Protects only because the replicas are spread: required hostname anti-affinity in
+# envs/prod/values.yaml. Under the earlier preferred rule these protected nothing.
+# Zeebe's PDB is chart-native (orchestration.podDisruptionBudget); the
+# ingress-nginx chart renders its own at replicaCount 2. Selectors carry the
+# release-name prefix (prod-camunda) - a bare instance label matches nothing.
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: prod-camunda-connectors
+  namespace: camunda
+spec:
+  maxUnavailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/instance: prod-camunda
+      app.kubernetes.io/component: connectors
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: prod-camunda-console
+  namespace: camunda
+spec:
+  maxUnavailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/instance: prod-camunda
+      app.kubernetes.io/component: console
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: prod-camunda-web-modeler-restapi
+  namespace: camunda
+spec:
+  maxUnavailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/instance: prod-camunda
+      app.kubernetes.io/component: restapi
+---
+# Loki renders no PDB of its own. Spread is the chart's own required hostname rule.
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: prod-loki
+  namespace: monitoring
+spec:
+  maxUnavailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/instance: prod-loki
+      app.kubernetes.io/component: single-binary

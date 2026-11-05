@@ -1,0 +1,39 @@
+# Wave 2: Loki (Helm, SingleBinary). Log store behind Grafana.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: prod-loki
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "2"
+spec:
+  project: camunda-prod
+  sources:
+    - repoURL: https://grafana.github.io/helm-charts
+      chart: loki
+      targetRevision: 6.28.0
+      helm:
+        valueFiles:
+          - $values/platform/loki/values.yaml
+    - repoURL: https://github.com/REPLACE_ME-github-org/camunda8-stackit-gitops.git
+      targetRevision: {{ .Values.targetRevision | quote }}
+      ref: values
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: monitoring
+  # volumeClaimTemplates is an atomic list: one undeclared subfield makes the whole list
+  # diff forever. Scoped to these three, not the whole list, so a pvcSize change still
+  # diffs and fails loudly on the immutable field.
+  ignoreDifferences:
+    - group: apps
+      kind: StatefulSet
+      jqPathExpressions:
+        - .spec.volumeClaimTemplates[]?.status
+        - .spec.volumeClaimTemplates[]?.spec.volumeMode
+        - .spec.volumeClaimTemplates[]?.metadata.annotations
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - ServerSideApply=true

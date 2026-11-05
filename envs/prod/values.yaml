@@ -1,0 +1,331 @@
+# =============================================================================
+# Camunda 8.9 -- PROD environment values (merged ON TOP of camunda/values.yaml).
+#
+# Profile: OpenSearch secondary storage, 3-AZ sizing, monitoring ON, Optimize ON.
+#
+# The dns_name placeholder my-camunda-prod.stackit.gg must match the prod landing-page
+# and webhook-door manifests.
+#
+# OpenSearch host/port (opensearchHost / opensearchPort, used only by Optimize)
+# are the managed-OpenSearch coordinates. For Optimize these are needed at
+# template time (the chart has no single-url field for it); set them here.
+# Orchestration's OpenSearch URL is still injected dynamically at runtime via the
+# platform-connection-config secret (OPENSEARCH_URL) -- see camunda/values.yaml.
+# =============================================================================
+
+global:
+  ingress:
+    host: my-camunda-prod.stackit.gg
+  identity:
+    auth:
+      issuer: https://login.microsoftonline.com/REPLACE_ME-entra-tenant-id/v2.0
+      issuerBackendUrl: https://login.microsoftonline.com/REPLACE_ME-entra-tenant-id/v2.0
+      authUrl: https://login.microsoftonline.com/REPLACE_ME-entra-tenant-id/oauth2/v2.0/authorize
+      tokenUrl: https://login.microsoftonline.com/REPLACE_ME-entra-tenant-id/oauth2/v2.0/token
+      jwksUrl: https://login.microsoftonline.com/REPLACE_ME-entra-tenant-id/discovery/v2.0/keys
+      identity:
+        clientId: REPLACE_ME-prod-identity-client-id
+        audience: REPLACE_ME-prod-identity-client-id
+        initialClaimValue: admin@example.com    # break-glass admin email
+      optimize:
+        clientId: REPLACE_ME-prod-optimize-client-id
+        audience: REPLACE_ME-prod-optimize-client-id
+        redirectUrl: https://my-camunda-prod.stackit.gg/optimize
+      webModeler:
+        clientId: REPLACE_ME-prod-webmodeler-client-id
+        clientApiAudience: REPLACE_ME-prod-webmodeler-client-id
+        publicApiAudience: REPLACE_ME-prod-webmodeler-api-client-id
+        redirectUrl: https://my-camunda-prod.stackit.gg/modeler
+      console:
+        clientId: REPLACE_ME-prod-console-client-id
+        audience: REPLACE_ME-prod-console-client-id
+        redirectUrl: https://my-camunda-prod.stackit.gg/console
+
+identity:
+  fullURL: https://my-camunda-prod.stackit.gg/managementidentity
+  # Not scalable: the chart hardcodes replicas: 1, so identity.replicas is ignored.
+  # Scatters the three singletons off each other. Preferred, not required: at 1 replica a hard
+  # rule would only strand the pod Pending -- there is no availability to protect.
+  affinity:
+    podAntiAffinity:
+      preferredDuringSchedulingIgnoredDuringExecution:
+        - weight: 100
+          podAffinityTerm:
+            labelSelector:
+              matchExpressions:
+                - key: app.kubernetes.io/component
+                  operator: In
+                  values:
+                    - identity
+                    - optimize
+                    - websockets
+            topologyKey: kubernetes.io/hostname
+
+connectors:
+  replicas: 2
+  # Required, not preferred: preferred co-located both replicas on every wake-up, leaving the
+  # PDB decorative. affinity only: the chart ignores topologySpreadConstraints.
+  affinity:
+    podAntiAffinity:
+      requiredDuringSchedulingIgnoredDuringExecution:
+        - labelSelector:
+            matchExpressions:
+              - key: app.kubernetes.io/component
+                operator: In
+                values:
+                  - connectors
+          topologyKey: kubernetes.io/hostname
+  security:
+    authentication:
+      oidc:
+        clientId: REPLACE_ME-prod-orchestration-client-id
+        tokenScope: REPLACE_ME-prod-orchestration-client-id/.default
+  # Deliberate full-list override (Helm replaces lists): prod fails CLOSED when
+  # connector-secrets has not synced; dev keeps optional=true.
+  envFrom:
+    - secretRef:
+        name: connector-secrets
+        optional: false
+
+orchestration:
+  security:
+    authentication:
+      oidc:
+        clientId: REPLACE_ME-prod-orchestration-client-id
+        audience: REPLACE_ME-prod-orchestration-client-id
+        redirectUrl: https://my-camunda-prod.stackit.gg
+        scope:
+          - openid
+          - profile
+          - offline_access
+          - REPLACE_ME-prod-orchestration-client-id/.default
+    initialization:
+      defaultRoles:
+        admin:
+          users:
+            - admin@example.com
+          groups:
+            - REPLACE_ME-prod-admins-group-id
+        connectors:
+          clients:
+            - REPLACE_ME-prod-orchestration-client-id
+      roles:
+        - roleId: user
+          name: User
+          groups:
+            - REPLACE_ME-prod-users-group-id
+      authorizations:
+        - ownerType: ROLE
+          ownerId: user
+          resourceType: PROCESS_DEFINITION
+          resourceId: "*"
+          permissions:
+            - READ_PROCESS_DEFINITION
+            - READ_PROCESS_INSTANCE
+            - CREATE_PROCESS_INSTANCE
+            - READ_USER_TASK
+            - CLAIM_USER_TASK
+            - COMPLETE_USER_TASK
+            - UPDATE_USER_TASK
+        - ownerType: ROLE
+          ownerId: user
+          resourceType: RESOURCE
+          resourceId: "*"
+          permissions:
+            - READ
+  ingress:
+    grpc:
+      host: zeebe.my-camunda-prod.stackit.gg
+  clusterSize: "3"
+  partitionCount: "3"
+  replicationFactor: "3"
+  pvcSize: 64Gi
+  # CPU limit must cover cpuThreadCount (3). cpu request is bounded by z2's headroom, not the
+  # 2750m measured draw. 8Gi limit: default 25% heap = 2Gi, rest off-heap RocksDB.
+  resources:
+    requests:
+      cpu: 1000m
+      memory: 4Gi
+    limits:
+      cpu: 3000m
+      memory: 8Gi
+  podDisruptionBudget:
+    enabled: true
+    minAvailable: null
+    maxUnavailable: 1
+  affinity:
+    podAntiAffinity:
+      requiredDuringSchedulingIgnoredDuringExecution:
+        - labelSelector:
+            matchExpressions:
+              - key: app.kubernetes.io/component
+                operator: In
+                values:
+                  - zeebe-broker
+          topologyKey: kubernetes.io/hostname
+        - labelSelector:
+            matchExpressions:
+              - key: app.kubernetes.io/component
+                operator: In
+                values:
+                  - zeebe-broker
+          topologyKey: topology.kubernetes.io/zone
+  data:
+    secondaryStorage:
+      type: opensearch
+      opensearch:
+        url: "${OPENSEARCH_URL}"
+        auth:
+          username: "${OPENSEARCH_USERNAME}"
+          secret:
+            existingSecret: opensearch-credentials
+            existingSecretKey: password
+  # Exporter args the chart does not expose as values. Prod-only because only prod renders
+  # these exporters; a ZEEBE_BROKER_EXPORTERS_* env var in the shared orchestration.env list
+  # would conjure a className-less exporter in dev and kill the broker. A config file has no
+  # list-merge risk: these keys are set here and nowhere else.
+  # The broker warns that zeebe.broker.exporters is "no longer supported" -- ignore it on 8.9.x.
+  # camunda.data.exporters REPLACES the autoconfigured exporter there instead of merging into it,
+  # which would drop the connection and history config. It only merges from 8.10.
+  extraConfiguration:
+    - file: exporter-tuning.yaml
+      content: |
+        zeebe:
+          broker:
+            exporters:
+              opensearch:
+                args:
+                  bulk:
+                    # This exporter flushes on size, not on the 5s delay -- 1000 was the
+                    # binding limit. 5000 docs is ~4MB, inside the 5-15MB recommended band.
+                    size: 5000
+                  index:
+                    # Optimize is this exporter's only consumer, and no Optimize importer
+                    # reads job records.
+                    job: false
+                    # Exports only the record types and intents Optimize imports; the rest
+                    # are dropped by the director's filter, before serialization. Needs
+                    # broker >= 8.9.0, else the filter is skipped for safety.
+                    optimizeModeEnabled: true
+              camundaexporter:
+                # Chart 14.9.0 dropped its own declaration. 8.9.x only supplies the className
+                # when the whole entry is absent, so args alone abort the broker at startup.
+                className: "io.camunda.exporter.CamundaExporter"
+                args:
+                  bulk:
+                    # The 5000 default became the binding trigger once #82 doubled export
+                    # throughput. ~13-17MB per bulk, under the 20MB memoryLimit default.
+                    size: 10000
+                  # Drops the tasklist task-variable write for process definitions that have
+                  # no user tasks. No unified-config equivalent exists for this key.
+                  skipVariableWriteWithoutUserTasks: true
+  # Exporter must match the backend (OpenSearch here).
+  exporters:
+    camunda:
+      enabled: true
+    rdbms:
+      enabled: false
+    zeebe:
+      enabled: false
+      # Feeds the legacy exporter Optimize forces on regardless of `enabled`. 0 keeps
+      # the chart from doubling zeebe-record storage with a replica per index.
+      replicas: 0
+  # Native retention OFF on STACKIT.
+  # retention below is the same ILM mechanism for the legacy zeebe-record exporter;
+  # off for the same reason (no ISM on the app credential), not dead config.
+  history:
+    retention:
+      enabled: false
+      minimumAge: 60d
+  retention:
+    enabled: false
+    minimumAge: 7d
+
+webModeler:
+  restapi:
+    replicas: 2
+    # Required, not preferred: co-located replicas make losing that node a full outage,
+    # and preferred did not prevent it. affinity only: the chart ignores spread constraints.
+    affinity:
+      podAntiAffinity:
+        requiredDuringSchedulingIgnoredDuringExecution:
+          - labelSelector:
+              matchExpressions:
+                - key: app.kubernetes.io/component
+                  operator: In
+                  values:
+                    - restapi
+            topologyKey: kubernetes.io/hostname
+    mail:
+      fromAddress: camunda@my-camunda-prod.stackit.gg
+  websockets:
+    # Singleton scatter -- same selector and reasoning as identity.affinity.
+    affinity:
+      podAntiAffinity:
+        preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            podAffinityTerm:
+              labelSelector:
+                matchExpressions:
+                  - key: app.kubernetes.io/component
+                    operator: In
+                    values:
+                      - identity
+                      - optimize
+                      - websockets
+              topologyKey: kubernetes.io/hostname
+
+console:
+  replicas: 2
+  # Required, not preferred -- same reason as connectors. affinity only: the chart
+  # ignores topologySpreadConstraints.
+  affinity:
+    podAntiAffinity:
+      requiredDuringSchedulingIgnoredDuringExecution:
+        - labelSelector:
+            matchExpressions:
+              - key: app.kubernetes.io/component
+                operator: In
+                values:
+                  - console
+          topologyKey: kubernetes.io/hostname
+
+# Optimize ON. Its OpenSearch host/port are needed at template time.
+# host/port/username are non-secret coordinates, committed deliberately (no
+# runtime-injection path in the chart); the password stays in SM only.
+optimize:
+  enabled: true
+  # Singleton scatter -- same selector and reasoning as identity.affinity.
+  affinity:
+    podAntiAffinity:
+      preferredDuringSchedulingIgnoredDuringExecution:
+        - weight: 100
+          podAffinityTerm:
+            labelSelector:
+              matchExpressions:
+                - key: app.kubernetes.io/component
+                  operator: In
+                  values:
+                    - identity
+                    - optimize
+                    - websockets
+            topologyKey: kubernetes.io/hostname
+  env:
+    - name: CAMUNDA_OPTIMIZE_BACKUP_REPOSITORY_NAME
+      value: "camunda-backup"
+  database:
+    opensearch:
+      enabled: true
+      url:
+        protocol: https
+        # fill from the foundation output `opensearch_host` (or the OPENSEARCH_URL
+        # entry in the prod SM `platform-connection-config`, minus scheme/port).
+        host: sed6f3c9-0.data.eu01.onstackit.cloud   # managed OpenSearch hostname (no scheme)
+        port: 53091
+      auth:
+        # fill from the OPENSEARCH_USERNAME entry in the prod SM `platform-connection-config`
+        username: a9s4bb64b5f539e4fef6efc7f11d4308c89c9840f29
+
+# Monitoring stack is deployed in prod: enable the Camunda ServiceMonitor.
+prometheusServiceMonitor:
+  enabled: true

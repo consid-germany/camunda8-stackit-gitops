@@ -1,0 +1,26 @@
+# Teams (Power Automate) webhook URL for Alertmanager — the sig= parameter makes it a
+# bearer credential, so it lives in SM, never in Git. Mounted via alertmanagerSpec.secrets
+# and consumed as webhook_url_file. PROD only (monitoring is not deployed in dev).
+apiVersion: external-secrets.io/v1
+kind: ExternalSecret
+metadata:
+  name: es-alertmanager-teams-webhook
+  namespace: monitoring
+spec:
+  refreshInterval: 1h
+  secretStoreRef:
+    name: secrets-prod
+    kind: ClusterSecretStore
+  target:
+    name: teams-webhook-url
+    creationPolicy: Owner
+    deletionPolicy: Retain
+    template:
+      engineVersion: v2
+      data:
+        url: "{{ .webhookUrl }}"
+  data:
+    - secretKey: webhookUrl
+      remoteRef:
+        key: teams-webhook-url
+        property: url

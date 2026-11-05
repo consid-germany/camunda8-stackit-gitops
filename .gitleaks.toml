@@ -1,0 +1,19 @@
+# Secret-scanning config (CI: .github/workflows/secret-scan.yml; local: `gitleaks dir .`).
+[extend]
+useDefault = true
+
+# Webhook URLs carrying an Azure shared-access signature (sig=) are bearer credentials;
+# the default rules miss them.
+[[rules]]
+id = "azure-sas-sig-url"
+description = "Webhook/SAS URL with a sig= shared-access signature"
+regex = '''https://[^\s"']+\.(?:powerplatform\.com|azure\.com|windows\.net)[^\s"']*[?&]sig=[A-Za-z0-9%_\-]{20,}'''
+
+# Entra client/group/tenant ids are UUID-shaped and non-secret; committed deliberately.
+[[allowlists]]
+regexTarget = "secret"
+regexes = ['''^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$''']
+
+# Local render output (gitignored; never present in CI checkouts).
+[[allowlists]]
+paths = ['''tests/temp/''']

@@ -1,0 +1,49 @@
+# Wave 2: Camunda 8.9 platform (Helm, multi-source).
+# Source 1: the camunda-platform chart from helm.camunda.io.
+# Source 2: THIS repo, providing the layered value files (common + dev overlay).
+# Helm merges valueFiles in order: camunda/values.yaml first, then envs/prod/values.yaml.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: prod-camunda
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "2"
+  # Cascade-delete finalizer; without it, removing this Application orphans its
+  # resources. See bootstrap/dev/30-camunda.yaml.
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: camunda-prod
+  sources:
+    - repoURL: https://helm.camunda.io
+      chart: camunda-platform
+      targetRevision: 14.10.0
+      helm:
+        valueFiles:
+          - $values/camunda/values.yaml
+          - $values/envs/prod/values.yaml
+    - repoURL: https://github.com/REPLACE_ME-github-org/camunda8-stackit-gitops.git
+      targetRevision: {{ .Values.targetRevision | quote }}
+      ref: values
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: camunda
+  # volumeClaimTemplates is an atomic list: one undeclared subfield makes the whole list
+  # diff forever. Scoped to these three, not the whole list, so a pvcSize change still
+  # diffs and fails loudly on the immutable field.
+  ignoreDifferences:
+    - group: apps
+      kind: StatefulSet
+      jqPathExpressions:
+        - .spec.volumeClaimTemplates[]?.status
+        - .spec.volumeClaimTemplates[]?.spec.volumeMode
+        - .spec.volumeClaimTemplates[]?.metadata.annotations
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - ServerSideApply=true
+      # Camunda CRDs/large objects + first-install schema migration take a while.
+      - ApplyOutOfSyncOnly=true

@@ -1,0 +1,10 @@
+# PROD only -- dev has no OpenSearch.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: camunda
+resources:
+  - ../base
+configMapGenerator:
+  - name: opensearch-retention-config
+    literals:
+      - INDEX_RETENTION_DAYS=60

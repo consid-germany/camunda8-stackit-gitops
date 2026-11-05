@@ -1,0 +1,9 @@
+# App-of-apps chart for the PROD cluster. root-prod renders it and passes
+# targetRevision down to every child Application that sources this repo.
+# targetRevision must be a full commit SHA (values.schema.json enforces it) --
+# the pin lives in camunda8-stackit-terraform stacks/prod/foundation/prod.tfvars.
+apiVersion: v2
+name: bootstrap-prod
+description: ArgoCD app-of-apps for the prod cluster
+type: application
+version: 1.0.0

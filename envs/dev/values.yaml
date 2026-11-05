@@ -1,0 +1,146 @@
+# =============================================================================
+# Camunda 8.9 -- DEV environment values (merged ON TOP of camunda/values.yaml).
+#
+# Profile: RDBMS secondary storage, single-AZ sizing, monitoring OFF, Optimize OFF.
+#
+# The dns_name my-camunda-dev.stackit.gg must match the dev landing-page
+# and webhook-door manifests.
+# =============================================================================
+
+global:
+  ingress:
+    host: my-camunda-dev.stackit.gg
+    # Office-CIDR gated at nginx via PROXY protocol (platform/ingress-nginx/dev-values.yaml);
+    # app-level access control is OIDC.
+  identity:
+    auth:
+      issuer: https://login.microsoftonline.com/REPLACE_ME-entra-tenant-id/v2.0
+      issuerBackendUrl: https://login.microsoftonline.com/REPLACE_ME-entra-tenant-id/v2.0
+      authUrl: https://login.microsoftonline.com/REPLACE_ME-entra-tenant-id/oauth2/v2.0/authorize
+      tokenUrl: https://login.microsoftonline.com/REPLACE_ME-entra-tenant-id/oauth2/v2.0/token
+      jwksUrl: https://login.microsoftonline.com/REPLACE_ME-entra-tenant-id/discovery/v2.0/keys
+      identity:
+        clientId: REPLACE_ME-dev-identity-client-id
+        audience: REPLACE_ME-dev-identity-client-id
+        initialClaimValue: admin@example.com   # break-glass admin email
+      optimize:
+        clientId: REPLACE_ME-dev-optimize-client-id
+        audience: REPLACE_ME-dev-optimize-client-id
+        redirectUrl: https://my-camunda-dev.stackit.gg/optimize
+      webModeler:
+        clientId: REPLACE_ME-dev-webmodeler-client-id
+        clientApiAudience: REPLACE_ME-dev-webmodeler-client-id
+        publicApiAudience: REPLACE_ME-dev-webmodeler-api-client-id
+        redirectUrl: https://my-camunda-dev.stackit.gg/modeler
+      console:
+        clientId: REPLACE_ME-dev-console-client-id
+        audience: REPLACE_ME-dev-console-client-id
+        redirectUrl: https://my-camunda-dev.stackit.gg/console
+
+identity:
+  fullURL: https://my-camunda-dev.stackit.gg/managementidentity
+
+connectors:
+  security:
+    authentication:
+      oidc:
+        clientId: REPLACE_ME-dev-orchestration-client-id
+        tokenScope: REPLACE_ME-dev-orchestration-client-id/.default
+
+orchestration:
+  security:
+    authentication:
+      oidc:
+        clientId: REPLACE_ME-dev-orchestration-client-id
+        audience: REPLACE_ME-dev-orchestration-client-id
+        redirectUrl: https://my-camunda-dev.stackit.gg
+        scope:
+          - openid
+          - profile
+          - offline_access
+          - REPLACE_ME-dev-orchestration-client-id/.default
+    initialization:
+      defaultRoles:
+        admin:
+          users:
+            - admin@example.com         # break-glass admin
+          groups:
+            - REPLACE_ME-dev-admins-group-id     # Entra admins group
+        connectors:
+          clients:
+            - REPLACE_ME-dev-orchestration-client-id
+      # Custom "user" role for regular members (view + work tasks + start instances).
+      roles:
+        - roleId: user
+          name: User
+          groups:
+            - REPLACE_ME-dev-users-group-id
+      authorizations:
+        - ownerType: ROLE
+          ownerId: user
+          resourceType: PROCESS_DEFINITION
+          resourceId: "*"
+          permissions:
+            - READ_PROCESS_DEFINITION
+            - READ_PROCESS_INSTANCE
+            - CREATE_PROCESS_INSTANCE
+            - READ_USER_TASK
+            - CLAIM_USER_TASK
+            - COMPLETE_USER_TASK
+            - UPDATE_USER_TASK
+        - ownerType: ROLE
+          ownerId: user
+          resourceType: RESOURCE
+          resourceId: "*"
+          permissions:
+            - READ
+  ingress:
+    grpc:
+      host: zeebe.my-camunda-dev.stackit.gg
+  # Single-AZ dev sizing: one broker, one partition, no replication.
+  clusterSize: "1"
+  partitionCount: "1"
+  replicationFactor: "1"
+  pvcSize: 16Gi
+  # Dev secondary storage = RDBMS only (no OpenSearch). Declaring just the rdbms block means
+  # the chart only references postgres-operate-credentials, which exists in dev.
+  data:
+    secondaryStorage:
+      type: rdbms
+      rdbms:
+        url: "${OPERATE_DATABASE_URL}"
+        username: "${OPERATE_DATABASE_USERNAME}"
+        secret:
+          existingSecret: postgres-operate-credentials
+          existingSecretKey: password
+  # Exporter must match the backend (RDBMS here). The 'camunda' exporter writes to
+  # OpenSearch/ES; with RDBMS storage it would try a non-existent OpenSearch.
+  exporters:
+    camunda:
+      enabled: false
+    rdbms:
+      enabled: true
+    zeebe:
+      enabled: false
+  history:
+    retention:
+      enabled: true
+      minimumAge: 60d
+  # Never renders in the RDBMS profile; false so it doesn't imply it's doing something.
+  retention:
+    enabled: false
+    minimumAge: 7d
+
+webModeler:
+  restapi:
+    mail:
+      fromAddress: camunda-dev@my-camunda-dev.stackit.gg
+
+# Optimize requires OpenSearch -- OFF in the RDBMS/dev profile.
+optimize:
+  enabled: false
+
+# Monitoring stack is not deployed in dev: disable the ServiceMonitor so the chart
+# renders without the (absent) Prometheus Operator CRD.
+prometheusServiceMonitor:
+  enabled: false

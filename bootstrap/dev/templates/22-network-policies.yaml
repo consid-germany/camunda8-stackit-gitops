@@ -1,0 +1,26 @@
+# Wave 1: NetworkPolicies (base = camunda, cert-manager, argocd,
+# external-secrets-system, secrets-manager, ingress-nginx). No OpenSearch egress
+# (RDBMS profile) and no monitoring policies (monitoring off in dev).
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: dev-network-policies
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "1"
+spec:
+  project: camunda-dev
+  source:
+    repoURL: https://github.com/REPLACE_ME-github-org/camunda8-stackit-gitops.git
+    targetRevision: {{ .Values.targetRevision | quote }}
+    path: cluster-config/network-policies/base
+    directory:
+      recurse: true
+  destination:
+    server: https://kubernetes.default.svc
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - ServerSideApply=true

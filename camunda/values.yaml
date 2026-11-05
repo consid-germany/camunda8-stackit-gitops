@@ -1,0 +1,424 @@
+# =============================================================================
+# Camunda 8.9 (camunda-platform chart 14.10.0) -- COMMON Helm values.
+#
+# This file holds everything that is identical across environments: security
+# hardening, OIDC wiring structure, the ESO-injected DB/OpenSearch env plumbing,
+# ingress structure, retention/exporter scaffolding. Per-environment values
+# (dns_name, OIDC client IDs, tenant id, group ids, sizing, toggles,
+# secondaryStorage type, optimize OpenSearch host) live in envs/<env>/values.yaml
+# and are merged ON TOP of this file by the ArgoCD multi-source Application
+# (later valueFile wins). See README "Camunda values layering".
+#
+# DYNAMIC COORDINATES (the key Terraform->GitOps conversion):
+# PostgresFlex / OpenSearch hostnames are NOT known at commit time, so they are
+# never hardcoded here. Connection URLs are injected at runtime from the
+# ESO-synced secrets `platform-connection-config` (foundation-written) and the
+# per-service postgres credential secrets, as Spring env vars. The chart renders
+# those env values verbatim into each component's Spring application.yaml as
+# `${...}` placeholders (orchestration/webModeler) or relies on Spring relaxed
+# binding env overrides (identity). Verified against
+# `helm show values camunda/camunda-platform --version 14.10.0` and the chart
+# templates -- see README "Verified chart keys".
+# =============================================================================
+
+global:
+  security:
+    authentication:
+      method: oidc
+  ingress:
+    enabled: true
+    className: nginx
+    annotations:
+      cert-manager.io/cluster-issuer: letsencrypt-production
+      kubernetes.io/tls-acme: "true"
+      nginx.ingress.kubernetes.io/ssl-redirect: "true"
+      # Redirect bare host '/' to the landing page sub-path.
+      nginx.ingress.kubernetes.io/app-root: /home
+    # host + tls.secretName are environment-agnostic in structure; the host value
+    # comes from envs/<env>/values.yaml (global.ingress.host).
+    tls:
+      enabled: true
+      secretName: camunda-tls
+
+  # Direct Microsoft Entra ID OIDC, no Keycloak. The issuer/auth/
+  # token/jwks URLs embed the Entra tenant id, supplied per env as
+  # global.identity.auth.<tenant-bearing fields> in envs/<env>/values.yaml.
+  identity:
+    auth:
+      enabled: true
+      type: MICROSOFT
+      # issuer / issuerBackendUrl / authUrl / tokenUrl / jwksUrl set per env.
+      identity:
+        # clientId / audience set per env.
+        initialClaimName: preferred_username
+        # initialClaimValue (break-glass admin email) set per env.
+        secret:
+          existingSecret: entra-credentials
+          existingSecretKey: identity-client-secret
+      optimize:
+        # clientId / audience / redirectUrl set per env.
+        secret:
+          existingSecret: entra-credentials
+          existingSecretKey: optimize-client-secret
+      # Web Modeler UI is an SPA (PKCE, no secret). clientApiAudience = UI app id
+      # (internal UI->restapi token aud); publicApiAudience = public API app id.
+      webModeler: {}
+      # Console is an SPA (PKCE, no secret).
+      console: {}
+
+# -----------------------------------------------------------------------------
+# Management Identity
+# -----------------------------------------------------------------------------
+identity:
+  enabled: true
+  # digest-pinned (renders as repo@digest; tag documents the version).
+  image:
+    tag: 8.9.9
+    digest: "sha256:68463a14b7493227b20c1fc382703e502823bf163f871bcbfae08dc50d3650c4"
+  # drop all Linux capabilities (chart already sets runAsNonRoot,
+  # readOnlyRootFilesystem, seccompProfile, no-priv-escalation).
+  containerSecurityContext:
+    capabilities:
+      drop:
+        - ALL
+  # identity talks to Postgres + Entra, never the kube API.
+  serviceAccount:
+    automountServiceAccountToken: false
+  resources:
+    requests:
+      cpu: 250m
+      memory: 512Mi
+    limits:
+      cpu: 1000m
+      memory: 1Gi
+  # In external-OIDC mode there is no local first user; the initial admin is the
+  # Entra identity matched by global.identity.auth.identity.initialClaimValue.
+  firstUser:
+    enabled: false
+  contextPath: /managementidentity
+  # fullURL set per env (embeds dns_name).
+  #
+  # DB WIRING (identity): the chart renders spring.datasource.url into a ConfigMap
+  # from externalDatabase.host/port/database, which we cannot know at commit time.
+  # So we leave externalDatabase.enabled=false (no datasource block, no bad host)
+  # and inject the full coordinates as Spring env vars instead. Spring relaxed
+  # binding maps SPRING_DATASOURCE_* -> spring.datasource.*. `identity.env` is
+  # rendered with `tpl (toYaml .)`, so valueFrom secretKeyRef is supported.
+  externalDatabase:
+    enabled: false
+  env:
+    # Entra 'groups' claim can exceed Tomcat's 8 KB header default for users in
+    # many groups. Spring Boot 4 property form.
+    - name: SERVER_MAX_HTTP_REQUEST_HEADER_SIZE
+      value: "32768"
+    - name: SPRING_DATASOURCE_URL
+      valueFrom:
+        secretKeyRef:
+          name: platform-connection-config
+          key: IDENTITY_DATABASE_URL
+    - name: SPRING_DATASOURCE_USERNAME
+      valueFrom:
+        secretKeyRef:
+          name: postgres-identity-credentials
+          key: username
+    - name: SPRING_DATASOURCE_PASSWORD
+      valueFrom:
+        secretKeyRef:
+          name: postgres-identity-credentials
+          key: password
+
+# -----------------------------------------------------------------------------
+# Connectors
+# -----------------------------------------------------------------------------
+connectors:
+  contextPath: /connectors
+  # digest of connectors-bundle:8.9.10.
+  image:
+    tag: 8.9.10
+    digest: "sha256:01a77c965bcd110c180f4b6192f1c9ebce3ad887806a6412397781603a7ae42e"
+  containerSecurityContext:
+    capabilities:
+      drop:
+        - ALL
+  resources:
+    requests:
+      cpu: 500m
+      memory: 1Gi
+    limits:
+      cpu: 1000m
+      memory: 2Gi
+  security:
+    authentication:
+      method: oidc
+      # Connectors authenticates machine-to-machine and reuses the Orchestration
+      # Cluster client (client_credentials). clientId / tokenScope set per env.
+      oidc:
+        secret:
+          existingSecret: entra-credentials
+          existingSecretKey: orchestration-cluster-client-secret
+  # SECRET_* env vars from the connector-secrets ESO secret; {{secrets.key}} in
+  # BPMN resolves these. optional=true so the dev pod starts before the first
+  # sync; the prod overlay overrides the whole list to fail closed.
+  envFrom:
+    - secretRef:
+        name: connector-secrets
+        optional: true
+
+# -----------------------------------------------------------------------------
+# Orchestration cluster (Zeebe broker + Operate + Tasklist + admin)
+# -----------------------------------------------------------------------------
+orchestration:
+  contextPath: /
+  # digest of camunda:8.9.19.
+  image:
+    tag: 8.9.19
+    digest: "sha256:ff98013af0b78ef7e02e296cccd9fd9d94a6356fea62e9cdfcea121a4e1c14b2"
+  containerSecurityContext:
+    capabilities:
+      drop:
+        - ALL
+  security:
+    authentication:
+      oidc:
+        # clientId / audience set per env.
+        usernameClaim: preferred_username
+        clientIdClaim: azp
+        preferUsernameClaim: true
+        # Map the Entra 'groups' claim to orchestration groups.
+        groupsClaim: groups
+        # redirectUrl / scope set per env (embed dns_name + client id).
+        secret:
+          existingSecret: entra-credentials
+          existingSecretKey: orchestration-cluster-client-secret
+    # Authorization is on by default: a user with no role is denied everywhere.
+    # Roles are granted to Entra groups (+ one break-glass admin email). The
+    # initialization block (defaultRoles/roles/authorizations) is environment
+    # specific (group ids + admin email) and lives in envs/<env>/values.yaml.
+  ingress:
+    grpc:
+      enabled: true
+      className: nginx
+      annotations:
+        cert-manager.io/cluster-issuer: letsencrypt-production
+        nginx.ingress.kubernetes.io/ssl-redirect: "true"
+        # Zeebe gateway speaks gRPC; nginx defaults backends to HTTP/1.1.
+        nginx.ingress.kubernetes.io/backend-protocol: GRPC
+        # Rendered as grpc_read/send_timeout for GRPC backends; the 60s default
+        # kills idle long-lived job-push streams.
+        nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+        nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
+      # host set per env (zeebe.<dns_name>).
+      tls:
+        enabled: true
+        secretName: camunda-zeebe-grpc-tls
+  # clusterSize / partitionCount / replicationFactor / pvcSize set per env.
+  pvcStorageClassName: zeebe-retain  # Retain + WaitForFirstConsumer
+  data:
+    secondaryStorage: {}
+  resources:
+    requests:
+      cpu: 500m
+      memory: 2Gi
+    limits:
+      cpu: 2000m
+      memory: 4Gi
+  env:
+    - name: CAMUNDA_SECURITY_AUTHENTICATION_OIDC_USERINFOENABLED
+      value: "false"
+    - name: CAMUNDA_DATA_SECONDARYSTORAGE_OPENSEARCH_BACKUP_REPOSITORYNAME
+      value: "camunda-backup"
+    - name: CAMUNDA_DATA_PRIMARYSTORAGE_BACKUP_RETENTION_WINDOW
+      value: "P7D"
+    - name: CAMUNDA_DATA_PRIMARYSTORAGE_BACKUP_RETENTION_CLEANUPSCHEDULE
+      value: "PT1H"
+    # Write-path cost: the exporter's indices otherwise take OpenSearch's 1s default on
+    # ~2.8M docs per load run. Applies at index creation only; costs up to 5s of
+    # Operate/Tasklist freshness. Inert in dev (RDBMS profile) -- gitops#72.
+    - name: CAMUNDA_DATA_SECONDARYSTORAGE_OPENSEARCH_REFRESHINTERVAL
+      value: "5s"
+    # The legacy exporter's job-record override lives in the prod overlay, not here: a
+    # ZEEBE_BROKER_EXPORTERS_OPENSEARCH_* var creates that exporter entry wherever it is
+    # set, and in dev the chart renders no exporters block for it to attach to, so the
+    # broker dies on a className-less exporter.
+    # The chart no longer derives the Zeebe message limit from global.config.requestBodySize,
+    # which drops it to the 4MB engine default. Both namespaces, as the chart used to render.
+    - name: CAMUNDA_CLUSTER_NETWORK_MAXMESSAGESIZE
+      value: "10MB"
+    - name: ZEEBE_BROKER_NETWORK_MAXMESSAGESIZE
+      value: "10MB"
+    # This shared list carries BOTH backends' coordinates on purpose: the OPERATE_* refs are inert in prod (OpenSearch profile), the
+    # OPENSEARCH_* refs are inert in dev (RDBMS profile) - all optional:true.
+    # Splitting per env would mean redefining the whole orchestration.env in an
+    # overlay (Helm list replacement, the known footgun).
+    - name: OPERATE_DATABASE_URL
+      valueFrom:
+        secretKeyRef:
+          name: platform-connection-config
+          key: OPERATE_DATABASE_URL
+          optional: true
+    - name: OPERATE_DATABASE_USERNAME
+      valueFrom:
+        secretKeyRef:
+          name: postgres-operate-credentials
+          key: username
+          optional: true
+    - name: OPENSEARCH_URL
+      valueFrom:
+        secretKeyRef:
+          name: platform-connection-config
+          key: OPENSEARCH_URL
+          optional: true
+    - name: OPENSEARCH_USERNAME
+      valueFrom:
+        secretKeyRef:
+          name: platform-connection-config
+          key: OPENSEARCH_USERNAME
+          optional: true
+  envFrom:
+    # Zeebe S3 backup config (ZEEBE_* keys) from the ESO secret.
+    - secretRef:
+        name: zeebe-backup-credentials
+
+# -----------------------------------------------------------------------------
+# Web Modeler
+# -----------------------------------------------------------------------------
+webModeler:
+  enabled: true
+  contextPath: /modeler
+  restapi:
+    # Needs the contextPath; the chart's ServiceMonitor uses this raw.
+    metrics:
+      prometheus: /modeler/metrics
+    # digest of web-modeler-restapi:8.9.8.
+    image:
+      tag: 8.9.8
+      digest: "sha256:b64219cc848275342077793110c19246627fb558ddea9256c1fccb5759724be7"
+    containerSecurityContext:
+      capabilities:
+        drop:
+          - ALL
+    resources:
+      requests:
+        cpu: 250m
+        memory: 1Gi
+      limits:
+        cpu: 1000m
+        memory: 2Gi
+    externalDatabase:
+      enabled: true
+      url: "${WEBMODELER_DATABASE_URL}"
+      user: "${WEBMODELER_DATABASE_USER}"
+      secret:
+        existingSecret: postgres-webmodeler-credentials
+        existingSecretKey: password
+    env:
+      - name: WEBMODELER_DATABASE_URL
+        valueFrom:
+          secretKeyRef:
+            name: platform-connection-config
+            key: WEBMODELER_DATABASE_URL
+      - name: WEBMODELER_DATABASE_USER
+        valueFrom:
+          secretKeyRef:
+            name: postgres-webmodeler-credentials
+            key: username
+    # Internal shared secret between restapi and websockets. Left unset the chart
+    # generates it per render, so every ArgoCD sync rewrote it and broke the
+    # collaboration WebSockets. Foundation-written, ESO-synced.
+    pusher:
+      secret:
+        existingSecret: web-modeler-pusher-credentials
+        existingSecretKey: pusher-app-secret
+      client:
+        secret:
+          existingSecret: web-modeler-pusher-credentials
+          existingSecretKey: pusher-app-key
+  webapp:
+    resources:
+      requests:
+        cpu: 100m
+        memory: 256Mi
+      limits:
+        cpu: 500m
+        memory: 512Mi
+  websockets:
+    # digest of web-modeler-websockets:8.9.8.
+    image:
+      tag: 8.9.8
+      digest: "sha256:ec6ece178a5d218e69ff193b2262dfba810f3665696b75895a38478ef9cff3d8"
+    containerSecurityContext:
+      capabilities:
+        drop:
+          - ALL
+    resources:
+      requests:
+        cpu: 100m
+        memory: 128Mi
+      limits:
+        cpu: 250m
+        memory: 256Mi
+
+# -----------------------------------------------------------------------------
+# Optimize (OpenSearch mode only; disabled in the RDBMS profile per env)
+# -----------------------------------------------------------------------------
+optimize:
+  # enabled set per env (false in rdbms/dev, true in opensearch/prod).
+  contextPath: /optimize
+  # digest of optimize:8.9.19.
+  image:
+    tag: 8.9.19
+    digest: "sha256:25485330c26480a8b107fa6efddf0d9a3fa6616de9ff60ec86c6fea4eb555dae"
+  containerSecurityContext:
+    capabilities:
+      drop:
+        - ALL
+  resources:
+    requests:
+      cpu: 400m
+      memory: 1Gi
+    limits:
+      cpu: 1000m
+      memory: 2Gi
+  migration:
+    enabled: true
+  database:
+    opensearch:
+      enabled: true
+      auth:
+        # username set per env (static).
+        secret:
+          existingSecret: opensearch-credentials
+          existingSecretKey: password
+
+# -----------------------------------------------------------------------------
+# Console (SPA, PKCE)
+# -----------------------------------------------------------------------------
+console:
+  enabled: true
+  contextPath: /console
+  # digest of console:8.9.93.
+  image:
+    tag: 8.9.93
+    digest: "sha256:aab0fed6e6f62c996724c9c2cebb38c1ba35b8004a535daf12f003af2578a819"
+  containerSecurityContext:
+    capabilities:
+      drop:
+        - ALL
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+
+# -----------------------------------------------------------------------------
+# Metrics. The release label must match the kube-prometheus-stack release so its
+# serviceMonitorSelector picks this up. `enabled` is set per env (false when the
+# monitoring stack is absent -- the ServiceMonitor CRD would be missing and the
+# chart would fail to render).
+# -----------------------------------------------------------------------------
+prometheusServiceMonitor:
+  labels:
+    release: kube-prometheus-stack
+  scrapeInterval: 10s

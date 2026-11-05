@@ -1,0 +1,21 @@
+# S3 credentials for Loki's chunk store. The whole entry is extracted as-is: the keys
+# are the env var names Loki expands in its config (-config.expand-env=true), so the
+# rendered ConfigMap holds ${LOKI_S3_*} placeholders and never a credential.
+# PROD only (monitoring is not deployed in dev).
+apiVersion: external-secrets.io/v1
+kind: ExternalSecret
+metadata:
+  name: es-loki-storage
+  namespace: monitoring
+spec:
+  refreshInterval: 1h
+  secretStoreRef:
+    name: secrets-prod
+    kind: ClusterSecretStore
+  target:
+    name: loki-storage-credentials
+    creationPolicy: Owner
+    deletionPolicy: Retain
+  dataFrom:
+    - extract:
+        key: loki-storage-credentials

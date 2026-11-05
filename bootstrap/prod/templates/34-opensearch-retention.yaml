@@ -1,0 +1,24 @@
+# Wave 3: retention fallback -- deletes dated operate-*/tasklist-* archive indices
+# older than 60 days (native ISM retention is unavailable on this credential).
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: prod-opensearch-retention
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "3"
+spec:
+  project: camunda-prod
+  source:
+    repoURL: https://github.com/REPLACE_ME-github-org/camunda8-stackit-gitops.git
+    targetRevision: {{ .Values.targetRevision | quote }}
+    path: cluster-config/opensearch-retention/prod
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: camunda
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - ServerSideApply=true

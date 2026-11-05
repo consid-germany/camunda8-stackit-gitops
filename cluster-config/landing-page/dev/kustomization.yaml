@@ -1,0 +1,13 @@
+# DEV landing page: shared workload + dev Ingress + ConfigMap generated from index.html.
+# Edit the page by editing index.html (not embedded YAML). The hash suffix kustomize adds
+# rolls the pod automatically when the HTML changes.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: camunda
+resources:
+  - ../base
+  - ingress.yaml
+configMapGenerator:
+  - name: landing-page
+    files:
+      - index.html

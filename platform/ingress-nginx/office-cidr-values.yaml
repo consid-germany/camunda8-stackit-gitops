@@ -1,0 +1,12 @@
+# The office-CIDR ingress gate, for BOTH envs. Merged ahead of <env>-values.yaml.
+# Change the CIDR here only -- every human-facing UI is behind it.
+controller:
+  config:
+    whitelist-source-range: "REPLACE_ME-office-cidr/32"
+  service:
+    # L4 gate. Coarse and provider-enforced, so a values mistake in the L7 gate
+    # above cannot leave the UIs open. Must be a SUPERSET of every range nginx admits, or it
+    # blocks traffic L7 would allow.
+    loadBalancerSourceRanges:
+      - "REPLACE_ME-office-cidr/32" # office-cidr
+      - "REPLACE_ME-runner-egress-ip/32" # ci runner

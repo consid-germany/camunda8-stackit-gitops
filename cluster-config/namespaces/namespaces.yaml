@@ -1,0 +1,69 @@
+# Namespaces created and labelled by ArgoCD.
+# external-secrets-system, secrets-manager and argocd are foundation-managed; their
+# enforce labels live in the infra repo (kubernetes_namespace_v1). `default` is
+# cluster-built-in; ArgoCD only merges the PSS labels onto it (ServerSideApply).
+#
+# Prune=false on every Namespace: a bad edit here must never delete a namespace and
+# cascade its PVCs. Everything else in this Application still prunes normally.
+#
+# camunda             : enforce=restricted (all pods verified compliant 2026-07-29)
+# monitoring          : warn/audit=restricted only — node-exporter (host namespaces,
+#                       hostPath, hostPort) and alloy (hostPath) fail even baseline,
+#                       so enforce is not possible here.
+# ingress-nginx       : enforce=restricted (controller verified compliant live)
+# cert-manager        : enforce=restricted (verified compliant live)
+# default             : enforce=restricted (must never run workloads)
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: camunda
+  annotations:
+    argocd.argoproj.io/sync-options: Prune=false
+  labels:
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/warn: restricted
+    pod-security.kubernetes.io/audit: restricted
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: monitoring
+  annotations:
+    argocd.argoproj.io/sync-options: Prune=false
+  labels:
+    pod-security.kubernetes.io/warn: restricted
+    pod-security.kubernetes.io/audit: restricted
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: ingress-nginx
+  annotations:
+    argocd.argoproj.io/sync-options: Prune=false
+  labels:
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/warn: restricted
+    pod-security.kubernetes.io/audit: restricted
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: cert-manager
+  annotations:
+    argocd.argoproj.io/sync-options: Prune=false
+  labels:
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/warn: restricted
+    pod-security.kubernetes.io/audit: restricted
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: default
+  annotations:
+    argocd.argoproj.io/sync-options: Prune=false
+  labels:
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/warn: restricted
+    pod-security.kubernetes.io/audit: restricted

@@ -1,0 +1,3 @@
+.DS_Store
+# Rendered manifests produced by tests/render.sh.
+tests/temp/

@@ -1,0 +1,43 @@
+# cert-manager ClusterIssuers for the prod cluster.
+# DNS-01 ACME via the STACKIT cert-manager webhook (wildcard-capable, needs no inbound
+# HTTP challenge; the LB is IP-locked).
+# The STACKIT SA key secret (stackit-sa-authentication) is installed in the
+# cert-manager namespace by the stackit-cert-manager-webhook Helm release.
+#
+# REPLACE_ME-prod-project-id -> the STACKIT project ID that owns the DNS zone.
+---
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: letsencrypt-production
+spec:
+  acme:
+    server: https://acme-v02.api.letsencrypt.org/directory
+    preferredChain: ISRG Root X1
+    privateKeySecretRef:
+      name: letsencrypt-production
+    solvers:
+      - dns01:
+          webhook:
+            groupName: acme.stackit.de
+            solverName: stackit
+            config:
+              projectId: REPLACE_ME-prod-project-id
+---
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: letsencrypt-staging
+spec:
+  acme:
+    server: https://acme-staging-v02.api.letsencrypt.org/directory
+    preferredChain: ISRG Root X1
+    privateKeySecretRef:
+      name: letsencrypt-staging
+    solvers:
+      - dns01:
+          webhook:
+            groupName: acme.stackit.de
+            solverName: stackit
+            config:
+              projectId: REPLACE_ME-prod-project-id

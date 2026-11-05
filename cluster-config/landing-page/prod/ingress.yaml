@@ -1,0 +1,27 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: landing-page
+  labels:
+    app.kubernetes.io/name: landing-page
+    app.kubernetes.io/component: landing-page
+  annotations:
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/rewrite-target: /
+spec:
+  ingressClassName: nginx
+  tls:
+    - hosts:
+        - my-camunda-prod.stackit.gg
+      secretName: camunda-tls
+  rules:
+    - host: my-camunda-prod.stackit.gg
+      http:
+        paths:
+          - path: /home
+            pathType: Prefix
+            backend:
+              service:
+                name: landing-page
+                port:
+                  number: 80

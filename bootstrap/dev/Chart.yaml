@@ -1,0 +1,7 @@
+# App-of-apps chart for the DEV cluster. root-dev renders it and passes
+# targetRevision down to every child Application that sources this repo.
+apiVersion: v2
+name: bootstrap-dev
+description: ArgoCD app-of-apps for the dev cluster
+type: application
+version: 1.0.0

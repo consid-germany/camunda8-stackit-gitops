@@ -1,0 +1,24 @@
+# Wave 2: PDBs for multi-replica Camunda components. Zeebe's PDB is
+# chart-native; ingress-nginx renders its own at 2 replicas.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: prod-disruption-budgets
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "2"
+spec:
+  project: camunda-prod
+  source:
+    repoURL: https://github.com/REPLACE_ME-github-org/camunda8-stackit-gitops.git
+    targetRevision: {{ .Values.targetRevision | quote }}
+    path: cluster-config/disruption-budgets/prod
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: camunda
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - ServerSideApply=true

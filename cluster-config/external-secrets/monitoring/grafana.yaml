@@ -1,0 +1,27 @@
+# Grafana Entra OAuth client secret, synced into the monitoring namespace.
+# Extracts the `grafana-client-secret` key from the `entra-credentials` SM entry
+# and exposes it as GF_AUTH_AZUREAD_CLIENT_SECRET (consumed via grafana.envFromSecret
+# in the kube-prometheus-stack values). PROD only (monitoring is not deployed in dev).
+apiVersion: external-secrets.io/v1
+kind: ExternalSecret
+metadata:
+  name: es-grafana-entra-secret
+  namespace: monitoring
+spec:
+  refreshInterval: 1h
+  secretStoreRef:
+    name: secrets-prod
+    kind: ClusterSecretStore
+  target:
+    name: grafana-entra-secret
+    creationPolicy: Owner
+    deletionPolicy: Retain
+    template:
+      engineVersion: v2
+      data:
+        GF_AUTH_AZUREAD_CLIENT_SECRET: "{{ .grafanaClientSecret }}"
+  data:
+    - secretKey: grafanaClientSecret
+      remoteRef:
+        key: entra-credentials
+        property: grafana-client-secret
